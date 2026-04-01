@@ -1,0 +1,255 @@
+<mujoco model="2W2L_10dof_v1_0_0">
+    <compiler angle="radian" eulerseq="XYZ" inertiafromgeom="false" balanceinertia="true"/>
+    <option timestep="0.005" gravity="0 0 -9.807" iterations="50" solver="Newton" jacobian="dense" integrator="implicitfast"/>
+
+    <visual>
+        <headlight diffuse="1 1 1" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+        <rgba haze="0.15 0.25 0.35 1"/>
+        <global azimuth="220" elevation="-20"/>
+    </visual>
+
+    <default>
+        <default class="visual">
+            <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+        </default>
+
+        <default class="collision">
+            <geom group="3"/>
+        </default>
+
+        <default class="collision_mesh">
+            <geom type="mesh" contype="1" conaffinity="1" group="0"/>
+        </default>
+
+        <joint damping="1.0" stiffness="0.0" frictionloss="0.1" armature="0.01"
+               actuatorfrclimited="true" actuatorfrcrange="-1000 1000"/>
+
+        <default class="wheels">
+            <joint damping="0.0" stiffness="0.0" frictionloss="0.1" armature="0.01"
+                   actuatorfrclimited="true" actuatorfrcrange="-1000 1000"/>
+        </default>
+    </default>
+
+    <worldbody>
+        <geom name="ground" type="plane" pos="0 0 0" size="20 20 0.1" material="MatPlane" friction="0.8 0.02 0.01" condim="3"/>
+
+        <body name="base_link" pos="0 0 0.5" quat="1 0 0 0">
+            <inertial pos="0.05723 0.00000 0.11935"
+                      mass="8.13000"
+                      fullinertia="0.09236205026 0.12834138627 0.14126980532 -0.00022662387 -0.00100227662 0.0"/>
+
+            <geom class="visual" mesh="base_link" rgba="0.752941176470588 0.752941176470588 0.752941176470588 1"/>
+            <geom class="collision_mesh" mesh="base_link"/>
+            <joint name="base_free_joint" type="free" damping="0.0"/>
+            <site name="imu" size="0.01" pos="0 0 0"/>
+
+            <!-- LEFT CHAIN -->
+            <body name="left_hip_pitch_link"
+                  pos="0.0173901946327299 0.109 0.0650000000000033"
+                  euler="1.5707963267949 0 -3.14159265358979">
+                <inertial pos="0.00040 0.00035 0.08242"
+                          mass="2.26087"
+                          fullinertia="0.00604146937 0.00599817336 0.00374632177 -0.00013547911 -0.00004988023 -0.00000510129"/>
+                <joint name="left_hip_pitch_joint"
+                       type="hinge"
+                       axis="0 0 1"
+                       range="-0.75 0.75"
+                       actuatorfrcrange="-120 120"/>
+                <geom class="visual" mesh="left_hip_pitch_link" rgba="0.752941176470588 0.752941176470588 0.752941176470588 1"/>
+                <geom class="collision_mesh" mesh="left_hip_pitch_link"/>
+
+                <body name="left_hip_roll_link"
+                      pos="-0.016376419984287 -0.0160253820078724 0.0989999999998602"
+                      euler="0.7745646843411118 -1.5707963267949 0">
+                    <inertial pos="-0.00003 -0.07606 -0.02868"
+                              mass="1.94378"
+                              fullinertia="0.00853487165 0.00428830226 0.00904960014 0.00000081572 -0.00000087727 -0.00047836788"/>
+                    <joint name="left_hip_roll_joint"
+                           type="hinge"
+                           axis="0 0 -1"
+                           range="-3.14 0.27"
+                           actuatorfrcrange="-120 120"/>
+                    <geom class="visual" mesh="left_hip_roll_link" rgba="0.752941176470588 0.752941176470588 0.752941176470588 1"/>
+                    <geom class="collision_mesh" mesh="left_hip_roll_link"/>
+
+                    <body name="left_hip_yaw_link"
+                          pos="0 -0.136999999999956 -0.0234999999313843"
+                          euler="-1.5707963267949 0 -3.14159265358979">
+                        <inertial pos="0.00021 -0.00004 0.15610"
+                                  mass="2.30635"
+                                  fullinertia="0.01467169396 0.01302677235 0.00403143399 -0.00000565300 0.00050130529 -0.00014306301"/>
+                        <joint name="left_hip_yaw_joint"
+                               type="hinge"
+                               axis="0 0 1"
+                               range="-3.14 3.14"
+                               actuatorfrcrange="-60 60"/>
+                        <geom class="visual" mesh="left_hip_yaw_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                        <geom class="collision_mesh" mesh="left_hip_yaw_link"/>
+
+                        <body name="left_leg_link"
+                            pos="0.0269999999758044 0 0.189999999999991"
+                            euler="-1.5707963267949 0.783291330601053 -1.5707963267949">
+                            <inertial pos="0.10707 -0.19940 0.00516"
+                                    quat="0.31506025 0.79695802 0.48927106 0.16189125"
+                                    mass="2.30187"
+                                    diaginertia="0.00782405 0.05022932 0.05805237"/>
+                            <joint name="left_leg_joint"
+                                   type="hinge"
+                                   axis="0 0 -1"
+                                   range="-1.3 3.14"
+                                   actuatorfrcrange="-120 120"/>
+                            <geom class="visual" mesh="left_leg_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                            <geom class="collision_mesh" mesh="left_leg_link"/>
+
+                            <body name="left_wheel_link"
+                                  pos="0.172540484425649 -0.321643873304246 -0.0335000000000001"
+                                  euler="-3.14159265358979 0 3.13286600732985">
+                                <inertial pos="0 0 0.02392"
+                                          mass="1.05726"
+                                          fullinertia="0.00506824142 0.00506824142 0.00973969691 0.00000000001 0.00000000042 0.00000000012"/>
+                                <joint name="left_wheel_joint"
+                                       type="hinge"
+                                       axis="0 0 1"
+                                       range="-100000 100000"
+                                       actuatorfrcrange="-36 36"
+                                       class="wheels"/>
+                                <geom class="visual" mesh="left_wheel_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                                <geom class="collision_mesh" mesh="left_wheel_link"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+
+            <!-- RIGHT CHAIN -->
+            <body name="right_hip_pitch_link"
+                  pos="0.0173901946327283 -0.109 0.0650000000000031"
+                  euler="1.5707963267949 0 0">
+                <inertial pos="-0.00017 0.00058 0.08119"
+                          mass="2.26087"
+                          fullinertia="0.00593463716 0.00588592719 0.00377321634 0.00014887088 0.00003276909 -0.00003554200"/>
+                <joint name="right_hip_pitch_joint"
+                       type="hinge"
+                       axis="0 0 -1"
+                       range="-0.75 0.75"
+                       actuatorfrcrange="-120 120"/>
+                <geom class="visual" mesh="right_hip_pitch_link" rgba="0.752941176470588 0.752941176470588 0.752941176470588 1"/>
+                <geom class="collision_mesh" mesh="right_hip_pitch_link"/>
+
+                <body name="right_hip_roll_link"
+                      pos="0.0163764199843046 -0.0160253820078555 0.098999999999854"
+                      euler="0.774564684341111 1.5707963267949 0">
+                    <inertial pos="-0.00003 -0.07606 -0.02868"
+                              mass="1.94378"
+                              fullinertia="0.00853487165 0.00428830226 0.00904960014 0.00000081572 -0.00000087727 -0.00047836788"/>
+                    <joint name="right_hip_roll_joint"
+                           type="hinge"
+                           axis="0 0 -1"
+                           range="-0.27 3.14"
+                           actuatorfrcrange="-120 120"/>
+                    <geom class="visual" mesh="right_hip_roll_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                    <geom class="collision_mesh" mesh="right_hip_roll_link"/>
+
+                    <body name="right_hip_yaw_link"
+                          pos="0 -0.136999999999979 -0.0234999999313846"
+                          euler="1.5707963267949 0 0">
+                        <inertial pos="0.00021 -0.00110 0.15610"
+                                  mass="2.30636"
+                                  fullinertia="0.01466895154 0.01302680830 0.00402865404 -0.00000477412 0.00050130296 0.00008272980"/>
+                        <joint name="right_hip_yaw_joint"
+                               type="hinge"
+                               axis="0 0 1"
+                               range="-3.14 3.14"
+                               actuatorfrcrange="-60 60"/>
+                        <geom class="visual" mesh="right_hip_yaw_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                        <geom class="collision_mesh" mesh="right_hip_yaw_link"/>
+
+                        <body name="right_leg_link"
+                            pos="0.0270000000241956 0 0.189999999999998"
+                            euler="-1.5707963267949 -0.774564684341111 -1.5707963267949">
+                            <inertial pos="-0.10876 -0.19847 0.00516"
+                                    quat="0.48521365 0.16125885 0.31597007 0.79920349"
+                                    mass="2.30187"
+                                    diaginertia="0.00791686 0.05017450 0.05809036"/>
+                            <joint name="right_leg_joint"
+                                   type="hinge"
+                                   axis="0 0 1"
+                                   range="-1.3 3.14"
+                                   actuatorfrcrange="-120 120"/>
+                            <geom class="visual" mesh="right_leg_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                            <geom class="collision_mesh" mesh="right_leg_link"/>
+
+                            <body name="right_wheel_link"
+                                  pos="-0.17534075129096 -0.320125945428892 -0.0335"
+                                  euler="-3.14159265358979 0 3.14159265358979">
+                                <inertial pos="0 0 0.02392"
+                                          mass="1.05726"
+                                          fullinertia="0.00506824143 0.00506824141 0.00973969691 0.0 -0.00000000001 0.00000000043"/>
+                                <joint name="right_wheel_joint"
+                                       type="hinge"
+                                       axis="0 0 1"
+                                       range="-100000 100000"
+                                       actuatorfrcrange="-36 36"
+                                       class="wheels"/>
+                                <geom class="visual" mesh="right_wheel_link" rgba="0.866666666666667 0.909803921568627 1 1"/>
+                                <geom class="collision_mesh" mesh="right_wheel_link"/>
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+    <asset>
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+        <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+                 rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8"
+                 width="300" height="300"/>
+        <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+
+        <hfield name="flat" file="../terrain/flat.png" nrow="256" ncol="256" size="140 140 10 0.1"/>
+        <hfield name="rocky_easy" file="../terrain/rocky_easy.png" nrow="512" ncol="512" size="140 140 0.1 0.1"/>
+        <hfield name="rocky_hard" file="../terrain/rocky_hard.png" nrow="512" ncol="512" size="140 140 0.25 0.1"/>
+        <hfield name="slope_easy" file="../terrain/slope_easy.png" nrow="512" ncol="512" size="140 140 0.5 0.1"/>
+        <hfield name="slope_hard" file="../terrain/slope_hard.png" nrow="512" ncol="512" size="140 140 1 0.1"/>
+        <hfield name="stairs_up_easy" file="../terrain/stairs_up_easy.png" nrow="512" ncol="512" size="5 5 0.60 0.5"/>
+        <hfield name="stairs_up_normal" file="../terrain/stairs_up_normal.png" nrow="512" ncol="512" size="5 5 0.7 0.5"/>
+        <hfield name="stairs_up_hard" file="../terrain/stairs_up_hard.png" nrow="512" ncol="512" size="5 5 0.825 0.5"/>
+
+        <mesh name="base_link" file="../mesh/base_link_modified.STL"/>
+        <mesh name="left_hip_pitch_link" file="../mesh/left_hip_pitch_link_modified.STL"/>
+        <mesh name="left_hip_roll_link" file="../mesh/left_hip_roll_link.STL"/>
+        <mesh name="left_hip_yaw_link" file="../mesh/left_hip_yaw_link_modified.STL"/>
+        <mesh name="left_leg_link" file="../mesh/left_leg_link.STL"/>
+        <mesh name="left_wheel_link" file="../mesh/left_wheel_link.STL"/>
+        <mesh name="right_hip_pitch_link" file="../mesh/right_hip_pitch_link_modified.STL"/>
+        <mesh name="right_hip_roll_link" file="../mesh/right_hip_roll_link.STL"/>
+        <mesh name="right_hip_yaw_link" file="../mesh/right_hip_yaw_link_modified.STL"/>
+        <mesh name="right_leg_link" file="../mesh/right_leg_link.STL"/>
+        <mesh name="right_wheel_link" file="../mesh/right_wheel_link.STL"/>
+    </asset>
+    
+    <actuator>
+        <motor joint="left_hip_pitch_joint" name="left_hip_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="left_hip_roll_joint" name="left_hip_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="left_hip_yaw_joint" name="left_hip_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="left_leg_joint" name="left_leg_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="left_wheel_joint" name="left_wheel_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        
+        <motor joint="right_hip_pitch_joint" name="right_hip_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="right_hip_roll_joint" name="right_hip_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="right_hip_yaw_joint" name="right_hip_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="right_leg_joint" name="right_leg_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="right_wheel_joint" name="right_wheel_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+    </actuator>
+
+    <sensor>
+        <framequat name="orientation" objtype="site" objname="imu" noise="0.1"/>
+        <framepos name="position" objtype="site" objname="imu" noise="0.1"/>
+        <gyro name="angular_velocity" site="imu" noise="0.2" cutoff="34.9"/>
+        <velocimeter name="linear_velocity" site="imu" noise="0.1" cutoff="30"/>
+        <accelerometer name="linear_acceleration" site="imu" noise="0.05" cutoff="157"/>
+        <magnetometer name="magnetometer" site="imu"/>
+    </sensor>
+</mujoco>

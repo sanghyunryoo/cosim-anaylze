@@ -1,0 +1,225 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="flamingo_light_v1">
+  <compiler angle="radian" />
+  <visual>
+    <headlight diffuse="1 1 1" ambient="0.3 0.3 0.3" specular="0 0 0" />
+    <rgba haze="0.15 0.25 0.35 1" />
+  </visual>
+
+  <default>
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="2" />
+    </default>
+    <default class="collision">
+      <geom contype="1" conaffinity="2" group="3"/>
+    </default>
+    <default class="collision_mesh">
+      <geom contype="1" conaffinity="1" group="0" />
+    </default>
+    <default class="joints">
+      <joint damping="0.1" stiffness="0.0" frictionloss="0.1" armature="0.01" />
+    </default>
+    <default class="wheels">
+      <joint damping="0.0" stiffness="0.0" frictionloss="0.1" armature="0.01" />
+    </default>
+  </default>
+
+  <worldbody>
+    <geom name="ground" pos="0 0 0" size="50 50 0.1" type="plane"
+      material="MatPlane" friction="0.8 0.02 0.01" condim="3"
+      contype="2" conaffinity="1"/>
+      
+    <!-- childclass="robot" 제거 -->
+    <body name="base_link" pos="0.00000000 0.00000000 0.09019200" quat="1 0 0 0">
+      <inertial 
+        mass="3.13636085113908"
+        pos="0.00705322184328916 -0.0011901676057699 -0.0205271896127508"
+        fullinertia="0.00595180427316569 0.0121386488747974 0.0138797598389655 7.53617189504094E-05 -0.000143245084870335 -1.21670979484625E-06"/>
+
+      <joint name="base_free_joint" type="free" damping="0.0" />
+      <site name="imu" size="0.01" pos="0.021 0.00025 -0.042"/>
+      <!-- base_link mesh 이름 일치 --> 
+      <geom name="base_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="base_link_fixed.STL" class="collision" />
+      <geom name="base_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="base_link_fixed.STL" class="visual" />
+
+      <body name="left_shoulder_link" pos="0 0.097 -0.015192"
+            quat="-2.5973434669646147e-06 -2.597353007557415e-06 0.7071080798547033 0.707105482506466">
+        <joint name="left_shoulder_joint" type="hinge" class="joints" range="-0.75 0" axis="0 0 1" />
+        <site name="left_shoulder_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="0.0572857732558713 -0.00016264369523891 0.00767454131283149" quat="1 0 0 0"
+                  mass="0.117891115649789" diaginertia="1.90663524296051e-05 0.000380241330363365 0.000397305585620506" />
+        <geom name="left_shoulder_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_shoulder_link.STL" class="collision" />
+        <geom name="left_shoulder_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="left_shoulder_link.STL" class="visual" />
+
+        <body name="left_leg_link" pos="0.16 -0.00046086 0.01775" quat="1 0 0 0">
+          <joint name="left_leg_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 1" />
+          <site name="left_leg_joint_site" pos="0 0 0" quat="1 0 0 0" />
+          <inertial pos="-0.0909333970428898 -0.00920311596060239 0.00578587163959148" quat="1 0 0 0"
+                    mass="0.197021604478099" diaginertia="7.8384251822843e-05 0.000562851669297102 0.00063473339128516" />
+          <geom name="left_leg_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_leg_link.STL" class="collision" />
+          <geom name="left_leg_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="left_leg_link.STL" class="visual" />
+
+          <body name="left_wheel_link" pos="-0.15892 -0.018539 0.04235" quat="1 0 0 0">
+            <joint name="left_wheel_joint" type="hinge" class="wheels" limited="false" axis="0 0 1" />
+            <site name="left_wheel_joint_site" pos="0 0 0" quat="1 0 0 0" />
+            <inertial pos="-1.75114046527258E-13 1.33476563135559E-13 0.0136958022383673" quat="1 0 0 0"
+                      mass="0.646708461162247" diaginertia="0.00120110082987407 0.00120110082987407 0.00221214715622246" />
+            <geom name="left_wheel_collision" type="cylinder" size="0.076 0.023"
+                  class="collision" friction="0.8 0.02 0.01" />
+            <geom name="left_wheel_visual"    type="cylinder" size="0.076 0.023"
+                  class="visual"   friction="0.8 0.02 0.01" />
+          </body>
+        </body>
+      </body>
+
+      <body name="right_shoulder_link" pos="0 -0.097 -0.015192" quat="0.7071054825112363 0.7071080798594735 0 0">
+        <joint name="right_shoulder_joint" type="hinge" class="joints" range="-0.75 0" axis="0 0 -1" />
+        <site name="right_shoulder_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="-0.0572857596523375 -0.000167366516090074 0.00757454131323096" quat="1 0 0 0"
+                  mass="0.117891115649791" diaginertia="1.90662572559088e-05 0.000380241425537061 0.000397305585620506" />
+        <geom name="right_shoulder_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_shoulder_link.STL" class="collision" />
+        <geom name="right_shoulder_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="right_shoulder_link.STL" class="visual" />
+
+        <body name="right_leg_link" pos="-0.16 -0.00046086 0.01765" quat="1 0 0 0">
+          <joint name="right_leg_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 -1" />
+          <site name="right_leg_joint_site" pos="0 0 0" quat="1 0 0 0" />
+          <inertial pos="0.0862119272554407 -0.00845060367246597 0.00287210623965717" quat="1 0 0 0"
+                    mass="0.183741067452062" diaginertia="6.6530312892098e-05 0.000549286736320932 0.000612510017841542" />
+          <geom name="right_leg_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_leg_link.STL" class="collision" />
+          <geom name="right_leg_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="right_leg_link.STL" class="visual" />
+
+          <body name="right_wheel_link" pos="0.15892 -0.018539 0.04235" quat="1 0 0 0">
+            <joint name="right_wheel_joint" type="hinge" class="wheels" limited="false" axis="0 0 -1" />
+            <site name="right_wheel_joint_site" pos="0 0 0" quat="1 0 0 0" />
+            <inertial pos="-4.14794067149504E-15 2.32452945780892E-16 0.0136958022383692" quat="1 0 0 0"
+                      mass="0.646708461162247" diaginertia="0.00120110082987407 0.00120110082987407 0.00221214715622246" />
+            <geom name="right_wheel_collision" type="cylinder" size="0.076 0.023"
+                  class="collision" friction="0.8 0.02 0.01" />
+            <geom name="right_wheel_visual"    type="cylinder" size="0.076 0.023"
+                  class="visual"   friction="0.8 0.02 0.01" />
+                    
+          </body>
+        </body>
+      </body>
+
+      <body name="left_upper_link" pos="-0.017101 0.1041 0.031793"
+            quat="-2.5973434669646147e-06 -2.597353007557415e-06 0.7071080798547033 0.707105482506466">
+        <joint name="left_upper_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 1" />
+        <site name="left_upper_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="0.0824572609458965 -0.0096458046124117 0.00257608687615473" quat="1 0 0 0"
+                  mass="0.0542159444815685" diaginertia="3.40144307116497e-06 0.000107626471521836 0.000109973958078027" />
+        <geom name="left_upper_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_upper_link.STL" class="collision" />
+        <geom name="left_upper_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="left_upper_link.STL" class="visual" />
+      </body>
+
+      <body name="right_upper_link" pos="-0.017101 -0.1032 0.031793" quat="0.7071054825112363 0.7071080798594735 0 0">
+        <joint name="right_upper_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 -1" />
+        <site name="right_upper_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="-0.0824572458719163 -0.00964580253747244 0.00337608687615384" quat="1 0 0 0"
+                  mass="0.0542159444815685" diaginertia="3.40144062650753e-06 0.000107626473966493 0.000109973958078027" />
+        <geom name="right_upper_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_upper_link.STL" class="collision" />
+        <geom name="right_upper_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="right_upper_link.STL" class="visual" />
+      </body>
+
+      <body name="FL_caster_link" pos="0.072 0.08 -0.090192"
+            quat="-2.5973434669646147e-06 -2.597353007557415e-06 0.7071080798547033 0.707105482506466">
+        <joint name="FL_caster_joint" type="hinge" class="joints" axis="0 0 1" />
+        <site name="FL_caster_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="2.77555756156289E-17 2.77555756156289E-17 -7.87395150884385E-05" quat="1 0 0 0"
+                  mass="0.0189802242930255" diaginertia="2.06499456119537e-06 2.06499456119537e-06 3.21940249155096e-06" />
+        <geom name="FL_caster_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="FL_caster_link.STL" class="collision" />
+        <geom name="FL_caster_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="FL_caster_link.STL" class="visual" />
+      </body>
+
+      <body name="FR_caster_link" pos="0.072 -0.08 -0.090192" quat="0.7071054825112363 0.7071080798594735 0 0">
+        <joint name="FR_caster_joint" type="hinge" class="joints" axis="0 0 -1" />
+        <site name="FR_caster_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="-1.38777878078145E-17 1.38777878078145E-17 -7.87395150884662E-05" quat="1 0 0 0"
+                  mass="0.0189802242930255" diaginertia="2.06499456119537e-06 2.06499456119537e-06 3.21940249155096e-06" />
+        <geom name="FR_caster_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="FR_caster_link.STL" class="collision" />
+        <geom name="FR_caster_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="FR_caster_link.STL" class="visual" />
+      </body>
+      
+      <body name="RL_caster_link" pos="-0.072 0.08 -0.090192"
+            quat="-2.5973434669646147e-06 -2.597353007557415e-06 0.7071080798547033 0.707105482506466">
+        <joint name="RL_caster_joint" type="hinge" class="joints" axis="0 0 1" />
+        <site name="RL_caster_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="1.38777878078145E-17 1.38777878078145E-17 -7.87395150884385E-05" quat="1 0 0 0"
+                  mass="0.0189802242930255" diaginertia="2.06499456119537e-06 2.06499456119537e-06 3.21940249155096e-06" />
+        <geom name="RL_caster_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="RL_caster_link.STL" class="collision" />
+        <geom name="RL_caster_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="RL_caster_link.STL" class="visual" />
+      </body>
+
+      <body name="RR_caster_link" pos="-0.072 -0.08 -0.090192" quat="0.7071054825112363 0.7071080798594735 0 0">
+        <joint name="RR_caster_joint" type="hinge" class="joints" axis="0 0 -1" />
+        <site name="RR_caster_joint_site" pos="0 0 0" quat="1 0 0 0" />
+        <inertial pos="-1.38777878078145E-17 1.38777878078145E-17 -7.87395150884385E-05" quat="1 0 0 0"
+                  mass="0.0189802242930255" diaginertia="2.06499456119537e-06 2.06499456119537e-06 3.21940249155096e-06" />
+        <geom name="RR_caster_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="RR_caster_link.STL" class="collision" />
+        <geom name="RR_caster_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="RR_caster_link.STL" class="visual" />
+      </body>
+
+
+    </body>
+  </worldbody>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072" />
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300" />
+    <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2" />
+    <material name="rubber" rgba="0.4 0.4 0.4 1" shininess="0.5" reflectance="0.2" />
+    <material name="visual_default" rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+    <material name="default_material" rgba="0.7 0.7 0.7 1" />
+    <material name="collision_material" rgba="1.0 0.28 0.1 0.9" />
+
+    <mesh name="base_link_fixed.STL" file="../mesh/base_link_fixed.STL" />
+
+    <mesh name="left_shoulder_link.STL" file="../mesh/left_shoulder_link.STL" />
+    <mesh name="left_leg_link.STL"      file="../mesh/left_leg_link.STL" />
+    <mesh name="left_wheel_link.STL"    file="../mesh/left_wheel_link.STL" />
+
+    <mesh name="right_shoulder_link.STL" file="../mesh/right_shoulder_link.STL" />
+    <mesh name="right_leg_link.STL"      file="../mesh/right_leg_link.STL" />
+    <mesh name="right_wheel_link.STL"    file="../mesh/right_wheel_link.STL" />
+
+    <mesh name="left_upper_link.STL"  file="../mesh/left_upper_link.STL" />
+    <mesh name="right_upper_link.STL" file="../mesh/right_upper_link.STL" />
+
+    <mesh name="FL_caster_link.STL" file="../mesh/FL_caster_link.STL" />
+    <mesh name="FR_caster_link.STL" file="../mesh/FR_caster_link.STL" />
+    <mesh name="RL_caster_link.STL" file="../mesh/RL_caster_link.STL" />
+    <mesh name="RR_caster_link.STL" file="../mesh/RR_caster_link.STL" />
+  </asset>
+
+  <equality>
+    <connect body2="left_upper_link"  body1="left_leg_link"  anchor="0.01561 0.02562 0.01145" solimp="0.001 1"/>
+    <connect body2="right_upper_link" body1="right_leg_link" anchor="-0.01561 0.02562 0.01145" solimp="0.001 1"/>
+  </equality>
+
+  <contact>
+    <exclude name="exclude_left_uppler_link"  body1="left_leg_link"  body2="left_upper_link" />
+    <exclude name="exclude_right_uppler_link" body1="right_leg_link" body2="right_upper_link" />
+    <exclude name="exclude_left_wheel_link"   body1="left_wheel_link"  body2="left_leg_link" />
+    <exclude name="exclude_right_wheel_link"  body1="right_wheel_link" body2="right_leg_link" />
+    <exclude name="exclude_left_shoulder_link"  body1="left_shoulder_link"  body2="left_leg_link" />
+    <exclude name="exclude_right_shoulder_link" body1="right_shoulder_link" body2="right_leg_link" />
+    <exclude name="exclude_base_link1" body1="base_link" body2="left_leg_link" />
+    <exclude name="exclude_base_link2" body1="base_link" body2="right_leg_link" />
+  </contact>
+
+  <actuator>
+    <motor joint="left_shoulder_joint"  name="left_shoulder_motor"  ctrllimited="true" ctrlrange="-17 17" />
+    <motor joint="right_shoulder_joint" name="right_shoulder_motor" ctrllimited="true" ctrlrange="-17 17" />
+    <motor joint="left_wheel_joint"     name="left_wheel_motor"     ctrllimited="true" ctrlrange="-17 17" />
+    <motor joint="right_wheel_joint"    name="right_wheel_motor"    ctrllimited="true" ctrlrange="-17 17" />
+  </actuator>
+
+  <sensor>
+    <framequat     name="orientation"         objtype="site" objname="imu" noise="0.1" />
+    <framepos      name="position"            objtype="site" objname="imu" noise="0.1" />
+    <gyro          name="angular-velocity"    site="imu"     noise="0.2" cutoff="34.9" />
+    <velocimeter   name="linear-velocity"     site="imu"     noise="0.1" cutoff="30" />
+    <accelerometer name="linear-acceleration" site="imu"     noise="0.05" cutoff="157" />
+    <magnetometer  name="magnetometer"        site="imu" />
+  </sensor>
+</mujoco>

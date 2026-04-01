@@ -18,116 +18,19 @@
         <default class="collision_mesh">
             <geom contype="1" conaffinity="1" group="0"/>
         </default>
-        <default class='joints'>
-            <joint damping="1.0" stiffness="0.0" frictionloss="0.1" armature="0.01" actuatorfrclimited="true" actuatorfrcrange="-1000 1000"/>
-        </default>
+        <joint damping="1.0" stiffness="0.0" frictionloss="0.1" armature="0.01" actuatorfrclimited="true" actuatorfrcrange="-1000 1000"/>
         <default class='wheels'>
             <joint damping="0.0" stiffness="0.0" frictionloss="0.1" armature="0.01" actuatorfrclimited="true" actuatorfrcrange="-1000 1000"/>
         </default>
     </default>
-    <worldbody>
-        <geom name="ground" pos="0 0 0" type="hfield" material="MatPlane" friction="0.8 0.02 0.01" condim="3"/>
-        <body name="base_link" pos="0.0 0.0 0.65">
-            <inertial pos="-6.91895333237158E-05 1.0078134715652E-09  -0.105326523086827" mass="25.5437677350952" diaginertia="0.0337358456123637 0.164774430032852 0.171422319027937"/>
-            <geom size="0.4 0.15 0.05" pos="0.0 0 0.0" type="box" rgba="0.8 0.2 0.2 0.3" class="visual"/>
-            <!-- <geom type="mesh" mesh="base_link" rgba="0.2 0.2 0.2 1" class="visual"/> -->
-            <site name="base_link_site" pos="0 0 0" size="0.01" rgba="0.2 0.2 0.2 1" />
-            <joint name="base_free_joint" type="free" damping="0.0" />
-            <site name='imu' size='0.01' pos='0.0 0 0.0'/>
-            
-            <body name="FL_hip_link" pos="0.2175 0.0765 -0.083" quat="0.499998 0.5 0.500002 0.5">
-                <inertial pos="-0.0280512 -4.5799e-05 0.0575474" quat="0.708805 0.705252 -0.0104885 0.0103021" mass="1.17391" diaginertia="0.0014338 0.000960279 0.000834727"/>
-                <joint name="FL_hip_joint" pos="0 0 0" axis="0 0 -1" range="-0.6 0.6" actuatorfrcrange="-60 60"/>
-                <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="FL_hip_link"/>
-                <body name="FL_shoulder_link" pos="-0.006575 0 0.069" quat="0.707105 0 0.707108 0">
-                    <inertial pos="0.0338333 -0.0212934 0.0643642" quat="0.242858 0.663994 -0.242899 0.664178" mass="2.09206" diaginertia="0.0062518 0.00531573 0.00110147"/>
-                    <joint name="FL_shoulder_joint" pos="0 0 0" axis="0 0 1" range="-1.5 2" actuatorfrcrange="-60 60"/>
-                    <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="FL_shoulder_link"/>
-                    <body name="FL_leg_link" pos="0.21393 -0.18065 0.089">
-                        <inertial pos="-0.125962 -0.179145 -0.00825592" quat="0.627059 0.327796 -0.626534 0.326806" mass="0.885355" diaginertia="0.00462611 0.00428807 0.000393367"/>
-                        <joint name="FL_leg_joint" pos="0 0 0" axis="0 0 1" range="-1.0754 1.0754" actuatorfrcrange="-90 90"/>
-                        <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="FL_leg_link"/>
-                        <body name="FL_wheel_link" pos="-0.16058 -0.23203 0.0085">
-                            <inertial pos="-8.64884e-07 1.48905e-06 0.0253373" quat="-0.182657 0.683108 0.182657 0.683108" mass="0.973733" diaginertia="0.00560479 0.00285709 0.00285696"/>
-                            <joint name="FL_wheel_joint" pos="0 0 0" axis="0 0 1" actuatorfrcrange="-36 36"/>
-                            <geom type="mesh" rgba="0.298039 0.298039 0.298039 1" mesh="FL_wheel_link" friction="0.8 0.02 0.01"/>
-                        </body>
-                    </body>
-                </body>
-            </body>
 
-            <body name="FR_hip_link" pos="0.2175 -0.0765 -0.083" quat="0.499998 0.5 0.500002 0.5">
-                <inertial pos="0.0280512 4.57793e-05 0.0575474" quat="0.705252 0.708805 0.0103021 -0.0104885" mass="1.17391" diaginertia="0.0014338 0.000960279 0.000834727"/>
-                <joint name="FR_hip_joint" pos="0 0 0" axis="0 0 -1" range="-0.6 0.6" actuatorfrcrange="-60 60"/>
-                <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="FR_hip_link"/>
-                <body name="FR_shoulder_link" pos="0.006575 0 0.069" quat="0.707105 0 -0.707108 0">
-                    <inertial pos="-0.0338195 -0.0212818 0.064365" quat="-0.242962 0.664234 0.242993 0.663865" mass="2.09206" diaginertia="0.0062518 0.00531573 0.00110147"/>
-                    <joint name="FR_shoulder_joint" pos="0 0 0" axis="0 0 -1" range="-1.5 2" actuatorfrcrange="-60 60"/>
-                    <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="FR_shoulder_link"/>
-                    <body name="FR_leg_link" pos="-0.21393 -0.18065 0.089">
-                        <inertial pos="0.125965 -0.179148 -0.00825597" quat="0.326799 0.626538 -0.327788 0.627063" mass="0.885357" diaginertia="0.00462611 0.00428809 0.000393352"/>
-                        <joint name="FR_leg_joint" pos="0 0 0" axis="0 0 -1" range="-1.0754 1.0754" actuatorfrcrange="-90 90"/>
-                        <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="FR_leg_link"/>
-                        <body name="FR_wheel_link" pos="0.16058 -0.23203 0.0084998">
-                            <inertial pos="8.63201e-07 -1.4916e-06 0.0253373" quat="-0.183368 0.682917 0.183368 0.682917" mass="0.973733" diaginertia="0.00560479 0.00285709 0.00285696"/>
-                            <joint name="FR_wheel_joint" pos="0 0 0" axis="0 0 -1" actuatorfrcrange="-36 36"/>
-                            <geom type="mesh" rgba="0.298039 0.298039 0.298039 1" mesh="FR_wheel_link" friction="0.8 0.02 0.01"/>
-                        </body>
-                    </body>
-                </body>
-            </body>
-            
-            <body name="RL_hip_link" pos="-0.2175 0.0765 -0.083" quat="0.499998 0.5 -0.500002 -0.5">
-                <inertial pos="0.0280512 4.57906e-05 0.0575474" quat="0.705252 0.708805 0.0103021 -0.0104885" mass="1.17391" diaginertia="0.0014338 0.000960279 0.000834727"/>
-                <joint name="RL_hip_joint" pos="0 0 0" axis="0 0 1" range="-0.6 0.6" actuatorfrcrange="-60 60"/>
-                <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="RL_hip_link"/>
-                <body name="RL_shoulder_link" pos="0.006575 0 0.069" quat="0.707105 0 -0.707108 0">
-                    <inertial pos="0.0318309 -0.0245442 0.064364" quat="0.273811 0.652038 -0.274043 0.651748" mass="2.09206" diaginertia="0.0062518 0.00531573 0.00110147"/>
-                    <joint name="RL_shoulder_joint" pos="0 0 0" axis="0 0 1" range="-1.5 2" actuatorfrcrange="-60 60"/>
-                    <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="RL_shoulder_link"/>
-                    <body name="RL_leg_link" pos="0.19596 -0.2 0.089">
-                        <inertial pos="-0.14228 -0.16648 -0.00825594" quat="0.641774 0.297884 -0.641296 0.29687" mass="0.885356" diaginertia="0.00462611 0.00428807 0.000393365"/>
-                        <joint name="RL_leg_joint" pos="0 0 0" axis="0 0 1" range="-1.0754 1.0754" actuatorfrcrange="-90 90"/>
-                        <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="RL_leg_link"/>
-                        <body name="RL_wheel_link" pos="-0.18172 -0.21587 0.0085002">
-                            <inertial pos="-1.71551e-06 1.64158e-07 0.0253373" quat="0.523272 0.475591 -0.523272 0.475591" mass="0.973733" diaginertia="0.00560479 0.00285709 0.00285696"/>
-                            <joint name="RL_wheel_joint" pos="0 0 0" axis="0 0 1" actuatorfrcrange="-36 36"/>
-                            <geom type="mesh" rgba="0.298039 0.298039 0.298039 1" mesh="RL_wheel_link" friction="0.8 0.02 0.01"/>
-                        </body>
-                    </body>
-                </body>
-            </body>
-
-            <body name="RR_hip_link" pos="-0.2175 -0.0765 -0.083" quat="0.499998 0.5 -0.500002 -0.5">
-                <inertial pos="-0.0280511 -4.57919e-05 0.0575474" quat="0.708805 0.705252 -0.0104885 0.0103021" mass="1.17391" diaginertia="0.0014338 0.000960279 0.000834727"/>
-                <joint name="RR_hip_joint" pos="0 0 0" axis="0 0 1" range="-0.6 0.6" actuatorfrcrange="-60 60"/>
-                <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="RR_hip_link"/>
-                <body name="RR_shoulder_link" pos="-0.0065749 0 0.069" quat="0.707105 0 0.707108 0">
-                    <inertial pos="-0.0318185 -0.0245315 0.0643649" quat="0.651797 0.2741 -0.651906 0.273948" mass="2.09206" diaginertia="0.0062518 0.00531573 0.00110147"/>
-                    <joint name="RR_shoulder_joint" pos="0 0 0" axis="0 0 -1" range="-1.5 2" actuatorfrcrange="-60 60"/>
-                    <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="RR_shoulder_link"/>
-                    <body name="RR_leg_link" pos="-0.19596 -0.2 0.089">
-                        <inertial pos="0.142283 -0.166484 -0.00825595" quat="0.296863 0.641299 -0.297876 0.641777" mass="0.885356" diaginertia="0.00462611 0.00428809 0.00039335"/>
-                        <joint name="RR_leg_joint" pos="0 0 0" axis="0 0 -1" range="-1.0754 1.0754" actuatorfrcrange="-90 90"/>
-                        <geom type="mesh" rgba="0.411765 0.411765 0.411765 1" mesh="RR_leg_link"/>
-                        <body name="RR_wheel_link" pos="0.18172 -0.21587 0.0085">
-                            <inertial pos="1.00319e-06 -1.4068e-06 0.0253373" quat="-0.215371 0.67351 0.215371 0.67351" mass="0.973733" diaginertia="0.00560479 0.00285709 0.00285696"/>
-                            <joint name="RR_wheel_joint" pos="0 0 0" axis="0 0 -1" actuatorfrcrange="-36 36"/>
-                            <geom type="mesh" rgba="0.298039 0.298039 0.298039 1" mesh="RR_wheel_link" friction="0.8 0.02 0.01"/>
-                        </body>
-                    </body>
-                </body>
-            </body>
-        </body>
-    </worldbody>
-
-    <asset>
+  <asset>
         <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
         <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
         <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
         <material name="rubber" rgba="0.4 0.4 0.4 1" shininess="0.5" reflectance="0.2"/>
 
-        <mesh name="base_link" file="../mesh/base_link.STL"/>
+        <mesh name="base_link" file="../mesh/base_link_fixed.STL"/>
         <mesh name="FL_hip_link"      file="../mesh/FL_hip_link.STL"/>
         <mesh name="FL_shoulder_link" file="../mesh/FL_shoulder_link.STL"/>
         <mesh name="FL_leg_link"      file="../mesh/FL_leg_link.STL"/>
@@ -151,28 +54,168 @@
         <hfield name="slope_hard" file="../terrain/slope_hard.png" nrow="512" ncol="512" size="140 140 1 0.1"/>
         <hfield name="stairs_up_easy" file="../terrain/stairs_up_easy.png" nrow="512" ncol="512" size="5 5 0.60 0.5"/>
         <hfield name="stairs_up_normal" file="../terrain/stairs_up_normal.png" nrow="512" ncol="512" size="5 5 0.7 0.5"/>
-        <hfield name="stairs_up_hard" file="../terrain/stairs_up_hard.png" nrow="512" ncol="512" size="5 5 0.825 0.5"/>
+        <hfield name="stairs_up_hard" file="../terrain/stairs_up_hard.png" nrow="512" ncol="512" size="5 5 1.0 0.5"/>
     </asset>
 
-    <actuator>
-        <motor joint="FL_hip_joint"      name="FL_hip_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="FR_hip_joint"      name="FR_hip_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RL_hip_joint"      name="RL_hip_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RR_hip_joint"      name="RR_hip_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="FL_shoulder_joint" name="FL_shoulder_motor" ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="FR_shoulder_joint" name="FR_shoulder_motor" ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RL_shoulder_joint" name="RL_shoulder_motor" ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RR_shoulder_joint" name="RR_shoulder_motor" ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="FL_leg_joint"      name="FL_leg_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="FR_leg_joint"      name="FR_leg_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RL_leg_joint"      name="RL_leg_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RR_leg_joint"      name="RR_leg_motor"      ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="FL_wheel_joint"    name="FL_wheel_motor"    ctrllimited="true" ctrlrange="-1000 1000"/>     
-        <motor joint="FR_wheel_joint"    name="FR_wheel_motor"    ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RL_wheel_joint"    name="RL_wheel_motor"    ctrllimited="true" ctrlrange="-1000 1000"/>
-        <motor joint="RR_wheel_joint"    name="RR_wheel_motor"    ctrllimited="true" ctrlrange="-1000 1000"/>
+
+  <worldbody>
+    <geom name="ground" pos="0 0 0" type="hfield" material="MatPlane" friction="0.8 0.02 0.01" condim="3"/>
+        <body name="base_link" pos="0.00000000 0.00000000 0.6" quat="1 0 0 0">
+        <inertial
+            pos="1.06109565578549E-13 -8.2662376943432E-11 -0.110665638577344"
+            fullinertia="0.0312045386079452 0.163213627193271 0.168143865426728 -1.82707572176856E-18 1.53778972666113E-16 -1.93611402951599E-14"
+            mass="22.2369484532319"/>
+
+        <site name="base_link_site" pos="0 0 0" size="0.01" rgba="0.2 0.2 0.2 1" />
+        <joint name="base_free_joint" type="free" damping="0.0" />
+        <site name='imu' size='0.01' pos='0.0 0 0.0'/>
+        <geom name="base_link_collision" pos="0 0 0"  type="mesh" mesh="base_link" class="collision" />
+        <geom name="base_link_visual" pos="0 0 0"  material="" type="mesh" mesh="base_link" class="visual" />
+    
+      <body name="FL_hip_link" pos="0.2175 0.0765 -0.015" quat="0.4999981633974483 0.49999999999662686 0.5000018366025516 0.49999999999662686">
+        <joint name="FL_hip_joint" pos="0 0 0" range="-0.6 0.6" axis="0 0 -1" actuatorfrcrange="-60 60"/>
+        <inertial pos="-0.028051194117615 -4.5800237647553E-05 0.0575473886492728"  mass="1.1739"
+                fullinertia="0.00143338630411442 0.000834730188061429 0.000960684775412724 -1.32167885890399E-07 1.39149259769805E-05 6.27678383803942E-07"/>
+        <geom type="mesh" mesh="FL_hip_link"/>
+
+        <body name="FL_shoulder_link" pos="-0.006575 0 0.069" quat="0.7071054825112363 0.0 0.7071080798594735 0.0">
+            <joint name="FL_shoulder_joint" pos="0 0 0" range="-1.5 2" axis="0 0 1" actuatorfrcrange="-60 60"/>
+            <inertial pos="0.0337939127403465 -0.02133799948841 0.0643422276990068"  mass="2.0924"
+                    fullinertia="0.00286854499702115 0.00357340938127146 0.0062765675791575 0.0020888541200686 -9.71954700323947E-07 6.44210604608446E-07"/>
+            <geom type="mesh" mesh="FL_shoulder_link"/>
+
+            <body name="FL_leg_link" pos="0.21318 -0.17612 0.088975" >
+            <joint name="FL_leg_joint" pos="0 0 0" range="-1.0754 1.0754" axis="0 0 1" actuatorfrcrange="-60 60"/>
+            <inertial pos="-0.12596232708184 -0.179144665088436 -0.00825592636040773"  mass="0.8854"
+                        fullinertia="0.00301603131094424 0.0016654087284196 0.0046261061446269 -0.00182651014799865 4.64616843673477E-07 -2.70321801996335E-07"/>
+            <geom type="mesh" mesh="FL_leg_link"/>
+            
+            <body name="FL_wheel_link" pos="-0.21318 -0.18488 0.0035" >
+            <joint name="FL_wheel_joint" pos="0 0 0" range="0 0" axis="0 0 1" actuatorfrcrange="-36 36" class="wheels"/>
+            <inertial pos="-1.11141096326151E-11 -1.7750245717707E-12 0.025277599220324"  mass="0.9760"
+                        fullinertia="0.00285750008717973 0.00285750008717973 0.00560535291700619 1.2851005504227E-18 1.68135817155351E-15 -2.46998703770911E-15"/>
+            <geom type="mesh" mesh="FL_wheel_link"/>
+            </body>
+            </body>
+        </body>
+        </body>
+
+        <body name="FR_hip_link" pos="0.2175 -0.0765 -0.015" quat="0.4999981633974483 0.49999999999662686 0.5000018366025516 0.49999999999662686">
+        <joint name="FR_hip_joint" pos="0 0 0" range="-0.6 0.6" axis="0 0 -1" actuatorfrcrange="-60 60"/>
+        <inertial pos="0.028051194117615 -4.5800237647553E-05 0.0575473886492728"  mass="1.1739"
+                fullinertia="0.00143338630411442 0.000834730188061429 0.000960684775412724 1.32167885890399E-07 -1.39149259769805E-05 6.27678383803942E-07"/>   
+        <geom type="mesh" mesh="FR_hip_link"/>
+
+        <body name="FR_shoulder_link" pos="0.006575 0 0.069" quat="0.7071054825112363 0.0 -0.7071080798594735 0.0">
+            <joint name="FR_shoulder_joint" pos="0 0 0" range="-1.5 2" axis="0 0 -1" actuatorfrcrange="-60 60"/>
+            <inertial pos="-0.0337939127403465 -0.02133799948841 0.0643422276990068"  mass="2.0924"
+                    fullinertia="0.00286854499702115 0.00357340938127146 0.0062765675791575 -0.0020888541200686 9.71954700323947E-07 6.44210604608446E-07"/>
+            <geom type="mesh" mesh="FR_shoulder_link"/>
+            
+            <body name="FR_leg_link" pos="-0.21318 -0.17612 0.088975" >
+            <joint name="FR_leg_joint" pos="0 0 0" range="-1.0754 1.0754" axis="0 0 -1" actuatorfrcrange="-60 60"/>
+            <inertial pos="0.12596232708184 -0.179144665088436 -0.00825592636040773"  mass="0.8854"
+                        fullinertia="0.00301603131094424 0.0016654087284196 0.0046261061446269 0.00182651014799865 -4.64616843673477E-07 -2.70321801996335E-07"/>
+            <geom type="mesh" mesh="FR_leg_link"/>
+
+            <body name="FR_wheel_link" pos="0.21318 -0.18488 0.0035" >
+            <joint name="FR_wheel_joint" pos="0 0 0" range="0 0" axis="0 0 -1" actuatorfrcrange="-36 36" class="wheels"/>
+            <inertial pos="-1.11141096326151E-11 -1.7750245717707E-12 0.025277599220324"  mass="0.9760"
+                        fullinertia="0.00285750008717973 0.00285750008717973 0.00560535291700619 1.2851005504227E-18 1.68135817155351E-15 -2.46998703770911E-15"/>
+            <geom type="mesh" mesh="FR_wheel_link"/>
+            </body>
+            </body>
+        </body>
+        </body>
+
+        <body name="RL_hip_link" pos="-0.2175 0.0765 -0.015" quat="0.4983410734778166 0.5016516101066935 -0.49834475881632523 -0.5016516101066935">
+        <joint name="RL_hip_joint" pos="0 0 0" range="-0.6 0.6" axis="0 0 1" actuatorfrcrange="-60 60"/>
+        <inertial pos="-0.028051194117615 -4.5800237647553E-05 0.0575473886492728"  mass="1.1739"
+                fullinertia="0.00143338630411442 0.000834730188061429 0.000960684775412724 -1.32167885890399E-07 1.39149259769805E-05 6.27678383803942E-07"/>
+        <geom type="mesh" mesh="RL_hip_link"/>
+        
+        <body name="RL_shoulder_link" pos="0.0065749 4.3487E-05 0.069" quat="0.7071054825112363 0.0 -0.7071080798594735 0.0">
+            <joint name="RL_shoulder_joint" pos="0 0 0" range="-1.5 2" axis="0 0 1" actuatorfrcrange="-60 60"/>
+            <inertial pos="0.0337939127403465 -0.02133799948841 0.0643422276990068"  mass="2.0924"
+                    fullinertia="0.00286854499702115 0.00357340938127146 0.0062765675791575 0.0020888541200686 -9.71954700323947E-07 6.44210604608446E-07"/>
+            <geom type="mesh" mesh="RL_shoulder_link"/> 
+
+            <body name="RL_leg_link" pos="0.21772 -0.18149 0.088975" >
+            <joint name="RL_leg_joint" pos="0 0 0" range="-1.0754 1.0754" axis="0 0 1" actuatorfrcrange="-60 60"/>
+            <inertial pos="-0.12596232708184 -0.179144665088436 -0.00825592636040773"  mass="0.8854"
+                        fullinertia="0.00301603131094424 0.0016654087284196 0.0046261061446269 -0.00182651014799865 4.64616843673477E-07 -2.70321801996335E-07"/>
+            <geom type="mesh" mesh="RL_leg_link"/>
+                                    
+            <body name="RL_wheel_link" pos="-0.21772 -0.17951 0.0035" >
+            <joint name="RL_wheel_joint" pos="0 0 0" range="0 0" axis="0 0 1" actuatorfrcrange="-36 36" class="wheels"/>
+            <inertial pos="-1.11141096326151E-11 -1.7750245717707E-12 0.025277599220324"  mass="0.9760"
+                        fullinertia="0.00285750008717973 0.00285750008717973 0.00560535291700619 1.2851005504227E-18 1.68135817155351E-15 -2.46998703770911E-15"/>
+            <geom type="mesh" mesh="RL_wheel_link"/>
+            </body>
+            </body>
+        </body>
+        </body>
+
+        <body name="RR_hip_link" pos="-0.2175 -0.0765 -0.015" quat="0.4983410734778166 0.5016516101066935 -0.49834475881632523 -0.5016516101066935">
+        <joint name="RR_hip_joint" pos="0 0 0" range="-0.6 0.6" axis="0 0 1" actuatorfrcrange="-60 60"/>
+        <inertial pos="0.028051194117615 -4.5800237647553E-05 0.0575473886492728"  mass="1.1739"
+                fullinertia="0.00143338630411442 0.000834730188061429 0.000960684775412724 1.32167885890399E-07 -1.39149259769805E-05 6.27678383803942E-07"/>
+        <geom type="mesh" mesh="RR_hip_link"/>
+        
+        <body name="RR_shoulder_link" pos="-0.0065748 -4.3511E-05 0.069" quat="0.7071016119976563 0.0023395956411939424 0.7071042093316763 -0.002339604235024375">
+            <joint name="RR_shoulder_joint" pos="0 0 0" range="-1.5 2" axis="0 0 -1" actuatorfrcrange="-60 60"/>
+            <inertial pos="-0.0337939127403465 -0.02133799948841 0.0643422276990068"  mass="2.0924"
+                    fullinertia="0.00286854499702115 0.00357340938127146 0.0062765675791575 -0.0020888541200686 9.71954700323947E-07 6.44210604608446E-07"/>
+            <geom type="mesh" mesh="RR_shoulder_link"/> 
+
+            <body name="RR_leg_link" pos="-0.21772 -0.18149 0.088975" >
+            <joint name="RR_leg_joint" pos="0 0 0" range="-1.0754 1.0754" axis="0 0 -1" actuatorfrcrange="-60 60"/>
+            <inertial pos="0.12596232708184 -0.179144665088436 -0.00825592636040773"  mass="0.8854"
+                        fullinertia="0.00301603131094424 0.0016654087284196 0.0046261061446269 0.00182651014799865 -4.64616843673477E-07 -2.70321801996335E-07"/>
+            <geom type="mesh" mesh="RR_leg_link"/>
+
+            <body name="RR_wheel_link" pos="0.21772 -0.17951 0.0035" >
+            <joint name="RR_wheel_joint" pos="0 0 0" range="0 0" axis="0 0 -1" actuatorfrcrange="-36 36" class="wheels"/>
+            <inertial pos="-1.11141096326151E-11 -1.7750245717707E-12 0.025277599220324"  mass="0.9760"
+                        fullinertia="0.00285750008717973 0.00285750008717973 0.00560535291700619 1.2851005504227E-18 1.68135817155351E-15 -2.46998703770911E-15"/>
+            <geom type="mesh" mesh="RR_wheel_link"/>
+            </body>
+            </body>
+        </body>
+        </body>
+        </body>
+    </worldbody>
+
+  <actuator>
+        <motor joint="FL_hip_joint"      name="FL_hip_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="FR_hip_joint"      name="FR_hip_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="RL_hip_joint"      name="RL_hip_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="RR_hip_joint"      name="RR_hip_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="FL_shoulder_joint" name="FL_shoulder_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="FR_shoulder_joint" name="FR_shoulder_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="RL_shoulder_joint" name="RL_shoulder_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="RR_shoulder_joint" name="RR_shoulder_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="FL_leg_joint"      name="FL_leg_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="-1.5"/>
+        <motor joint="FR_leg_joint"      name="FR_leg_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="-1.5"/>
+        <motor joint="RL_leg_joint"      name="RL_leg_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="-1.5"/>
+        <motor joint="RR_leg_joint"      name="RR_leg_joint"      ctrllimited="true" ctrlrange="-1000 1000" gear="-1.5"/>
+        <motor joint="FL_wheel_joint"    name="FL_wheel_joint"    ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>     
+        <motor joint="FR_wheel_joint"    name="FR_wheel_joint"    ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="RL_wheel_joint"    name="RL_wheel_joint"    ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
+        <motor joint="RR_wheel_joint"    name="RR_wheel_joint"    ctrllimited="true" ctrlrange="-1000 1000" gear="1"/>
     </actuator>
 
+    <contact>
+        <exclude body1="base_link" body2="FL_hip_link"/>
+        <exclude body1="base_link" body2="FL_shoulder_link"/>
+        <exclude body1="base_link" body2="FR_hip_link"/>
+        <exclude body1="base_link" body2="FR_shoulder_link"/>
+        <exclude body1="base_link" body2="RL_hip_link"/>
+        <exclude body1="base_link" body2="RL_shoulder_link"/>
+        <exclude body1="base_link" body2="RR_hip_link"/>
+        <exclude body1="base_link" body2="RR_shoulder_link"/>
+    </contact>
+    <compiler angle="radian" balanceinertia="true"/>
     <sensor>
         <framequat name="orientation" objtype="site" noise="0.1" objname="imu"/>
         <framepos name="position" objtype="site" noise="0.1" objname="imu"/>

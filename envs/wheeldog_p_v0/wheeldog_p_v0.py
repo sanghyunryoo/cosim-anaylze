@@ -8,7 +8,8 @@ from envs.wheeldog_p_v0.manager.control_manager import ControlManager
 from envs.wheeldog_p_v0.manager.xml_manager import XMLManager
 from envs.wheeldog_p_v0.utils.math_utils import MathUtils
 from envs.wheeldog_p_v0.utils.mujoco_utils import MuJoCoUtils
-from envs.wheeldog_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data, uniform_noisy_data
+from envs.wheeldog_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data
+from envs.initial_pose import build_initial_qpos
 
 
 class WheelDogPV0(MujocoEnv, utils.EzPickle):
@@ -17,11 +18,20 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         # Set Basic Properties
         self.id = "wheeldog_p_v0"
         self.config = config
-        self.action_dim = 16
-        self.action_scaler = [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 20.0, 20.0, 20.0, 20.0]
+        self.action_dim = int(config["hardware"]["action_dim"])
+        self.has_wheels = (self.action_dim >= 16)  # 12: no-wheel, 16: with-wheel
+        
+        leg_scaler = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        
+        wheel_scaler = [40.0, 40.0, 40.0, 40.0] if self.has_wheels else []   
+        default_action_scales = leg_scaler + wheel_scaler
+        cfg_action_scales = config.get("action_scales", default_action_scales)
+        if not isinstance(cfg_action_scales, (list, tuple)) or len(cfg_action_scales) != self.action_dim:
+            cfg_action_scales = default_action_scales
+        self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
         self.render_mode = render_mode
         self.render_flag = render_flag
-
+        
         # PD control parameters
         self.kp_hip = config["hardware"]["Kp_hip"]
         self.kp_shoulder = config["hardware"]["Kp_shoulder"]
@@ -32,6 +42,11 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         self.kd_leg = config["hardware"]["Kd_leg"]
         self.kd_wheel = config["hardware"]["Kd_wheel"]
 
+        # Gear settings
+        self.gear_ratio = config["hardware"]["gear_ratio"]
+        self.gamma = config["hardware"]["gamma"]
+        self.use_gear = (self.gear_ratio != 1.0)
+        
         # Set Simulation Properties
         precision_level = self.config["random"]["precision"]
         sensor_noise_level = self.config["random"]["sensor_noise"]
@@ -68,7 +83,7 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         # Set dimensions of observations
         self.obs_to_dim = {
             "dof_pos": 12,
-            "dof_vel": 16,
+            "dof_vel": 16 if self.has_wheels else 12,
             "ang_vel": 3,
             "lin_vel_x": 1,
             "lin_vel_y": 1,
@@ -95,15 +110,18 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
 
         # Set Indices of q and qd
         qpos_joint_names = ['FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint', 'FL_shoulder_joint', 'FR_shoulder_joint', 'RL_shoulder_joint', 'RR_shoulder_joint', 'FL_leg_joint', 'FR_leg_joint', 'RL_leg_joint', 'RR_leg_joint']
-        qvel_joint_names = ['FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint', 'FL_shoulder_joint', 'FR_shoulder_joint', 'RL_shoulder_joint', 'RR_shoulder_joint', 'FL_leg_joint', 'FR_leg_joint', 'RL_leg_joint', 'RR_leg_joint', 'FL_wheel_joint', 'FR_wheel_joint', 'RL_wheel_joint', 'RR_wheel_joint']
+        qvel_joint_names = qpos_joint_names + (['FL_wheel_joint', 'FR_wheel_joint', 'RL_wheel_joint', 'RR_wheel_joint'] if self.has_wheels else [])
+        self.initial_joint_names = list(qvel_joint_names)
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
         
     def _get_obs(self):
-        dof_pos = self.data.qpos[self.q_indices]
+        dof_pos = self.data.qpos[self.q_indices].copy()
+        dof_pos[8:12] = dof_pos[8:12] * self.gear_ratio if self.use_gear else dof_pos[8:12]  # Joint space -> Motor space
+        
         dof_vel = self.data.qvel[self.qd_indices]
+        dof_vel[8:12] = dof_vel[8:12] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[8:12]  # Joint space -> Motor space
         ang_vel = self.data.sensor('angular-velocity').data.astype(np.double)
-        lin_vel = self.data.sensor("linear-velocity").data.astype(np.float32)
         quat = self.data.sensor('orientation').data[[1, 2, 3, 0]].astype(np.double)
         if np.all(quat == 0):
             quat = np.array([0, 0, 0, 1])
@@ -117,7 +135,6 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         dof_pos_noisy = truncated_gaussian_noisy_data(dof_pos, mean=self.sensor_noise_map["dof_pos"]["mean"], std=self.sensor_noise_map["dof_pos"]["std"], lower=self.sensor_noise_map["dof_pos"]["lower"], upper=self.sensor_noise_map["dof_pos"]["upper"])
         dof_vel_noisy = truncated_gaussian_noisy_data(dof_vel, mean=self.sensor_noise_map["dof_vel"]["mean"], std=self.sensor_noise_map["dof_vel"]["std"], lower=self.sensor_noise_map["dof_vel"]["lower"], upper=self.sensor_noise_map["dof_vel"]["upper"])
         ang_vel_noisy = truncated_gaussian_noisy_data(ang_vel, mean=self.sensor_noise_map["ang_vel"]["mean"], std=self.sensor_noise_map["ang_vel"]["std"], lower=self.sensor_noise_map["ang_vel"]["lower"], upper=self.sensor_noise_map["ang_vel"]["upper"])
-        lin_vel_noisy = truncated_gaussian_noisy_data(lin_vel, mean=self.sensor_noise_map["lin_vel"]["mean"], std=self.sensor_noise_map["lin_vel"]["std"], lower=self.sensor_noise_map["lin_vel"]["lower"], upper=self.sensor_noise_map["lin_vel"]["upper"])
         projected_gravity_noisy = truncated_gaussian_noisy_data(projected_gravity, mean=self.sensor_noise_map["projected_gravity"]["mean"], std=self.sensor_noise_map["projected_gravity"]["std"], lower=self.sensor_noise_map["projected_gravity"]["lower"], upper=self.sensor_noise_map["projected_gravity"]["upper"])
         height_map_noisy = truncated_gaussian_noisy_data(height_map, mean=self.sensor_noise_map["height_map"]["mean"], std=self.sensor_noise_map["height_map"]["std"], lower=self.sensor_noise_map["height_map"]["lower"], upper=self.sensor_noise_map["height_map"]["upper"])
         
@@ -125,9 +142,6 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
             "dof_pos": dof_pos_noisy,
             "dof_vel": dof_vel_noisy,
             "ang_vel": ang_vel_noisy,
-            "lin_vel_x": lin_vel_noisy[0],
-            "lin_vel_y": lin_vel_noisy[1],
-            "lin_vel_z": lin_vel_noisy[2],
             "projected_gravity": projected_gravity_noisy,
             "height_map": height_map_noisy,
             "last_action": self.action
@@ -144,29 +158,37 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         # Extract joint positions and velocities from observation
         pos_hip = dof_pos[0:4]
         pos_shoulder = dof_pos[4:8]
-        pos_leg = dof_pos[8:12]
+        pos_leg = dof_pos[8:12] * self.gear_ratio if self.use_gear else dof_pos[8:12]  # Joint space -> Motor space
 
         vel_hip = dof_vel[0:4]
         vel_shoulder = dof_vel[4:8]
-        vel_leg = dof_vel[8:12]
-        vel_wheel = dof_vel[12:16]
+        vel_leg = dof_vel[8:12] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[8:12]  # Joint space -> Motor space
 
         hip_action_scaled = self.filtered_action[0:4] * self.action_scaler[0:4]
         shoulder_action_scaled = self.filtered_action[4:8] * self.action_scaler[4:8]
         leg_action_scaled = self.filtered_action[8:12] * self.action_scaler[8:12]
-        wheel_action_scaled = self.filtered_action[12:16] * self.action_scaler[12:16]
 
         hip_torques = self.control_manager.pd_controller(self.kp_hip, hip_action_scaled, pos_hip, self.kd_hip, 0.0, vel_hip)
+        
         shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, shoulder_action_scaled, pos_shoulder, self.kd_shoulder, 0.0, vel_shoulder)
         leg_torques = self.control_manager.pd_controller(self.kp_leg, leg_action_scaled, pos_leg, self.kd_leg, 0.0, vel_leg)
-        wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
-
+        leg_torques = leg_torques * np.full(4, self.gamma, dtype=np.float64) if self.use_gear else leg_torques
+        
         hip_torques_clipped = np.clip(hip_torques, -self.config['hardware']['hip_max_torque'], self.config['hardware']['hip_max_torque'])
         shoulder_torques_clipped = np.clip(shoulder_torques, -self.config['hardware']['shoulder_max_torque'], self.config['hardware']['shoulder_max_torque'])
         leg_torques_clipped = np.clip(leg_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque'])
-        wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
+        
+        torques_list = [hip_torques_clipped, shoulder_torques_clipped, leg_torques_clipped]
 
-        self.applied_torques = np.concatenate([hip_torques_clipped, shoulder_torques_clipped, leg_torques_clipped, wheel_torques_clipped])
+        # If wheels exist, add wheel control (pure D + FF)
+        if self.has_wheels:
+            vel_wheel = dof_vel[12:16]
+            wheel_action_scaled = self.filtered_action[12:16] * self.action_scaler[12:16]
+            wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
+            wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
+            torques_list.append(wheel_torques_clipped)
+        
+        self.applied_torques = np.concatenate(torques_list)
         self.do_simulation(self.applied_torques, self.frame_skip)
 
         obs = self._get_obs()
@@ -185,8 +207,10 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         ang_vel = self.data.sensor('angular-velocity').data.astype(np.double)
         lin_vel = self.data.sensor("linear-velocity").data.astype(np.float32)
         joint_state = [dof_pos[0], dof_pos[1], dof_pos[2], dof_pos[3], dof_pos[4], dof_pos[5], dof_pos[6], dof_pos[7], dof_pos[8], dof_pos[9], dof_pos[10], dof_pos[11],
-                        dof_vel[12], dof_vel[13], dof_vel[14], dof_vel[15]]
-
+        ]
+        if self.has_wheels:
+            joint_state.extend([dof_vel[12], dof_vel[13], dof_vel[14], dof_vel[15]])
+            
         info = {
             "dt": self.dt_ * self.frame_skip,
             "action": self.action,
@@ -224,12 +248,15 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         return obs
 
     def initial_qpos(self):
-        qpos = np.zeros(self.model.nq)
-        qpos[2] = 0.6
-        qpos[3:7] = np.array([1, 0, 0, 0])
-        qpos[7:23] = np.zeros(16)
-        qpos[7:23] = uniform_noisy_data(qpos[7:23], lower=-self.init_noise, upper=self.init_noise)
-        return qpos
+        env_id = self.config.get("env", {}).get("id", self.id)
+        return build_initial_qpos(
+            self.model,
+            self.mujoco_utils,
+            self.config,
+            env_id=env_id,
+            init_noise=self.init_noise,
+            joint_names=self.initial_joint_names,
+        )
     
     def event(self, event: str, value):
         if event == 'push':
@@ -256,5 +283,4 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
             self.viewer = None
             print("Viewer closed")
         super().close()  # Call the parent class's close method to ensure everything is properly closed
-
 

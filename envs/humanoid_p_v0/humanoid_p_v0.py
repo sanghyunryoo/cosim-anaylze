@@ -8,7 +8,8 @@ from envs.humanoid_p_v0.manager.control_manager import ControlManager
 from envs.humanoid_p_v0.manager.xml_manager import XMLManager
 from envs.humanoid_p_v0.utils.math_utils import MathUtils
 from envs.humanoid_p_v0.utils.mujoco_utils import MuJoCoUtils
-from envs.humanoid_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data, uniform_noisy_data
+from envs.humanoid_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data
+from envs.initial_pose import build_initial_qpos
 
 
 class HumanoidPV0(MujocoEnv, utils.EzPickle):
@@ -17,8 +18,12 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         # Set Basic Properties
         self.id = "humanoid_p_v0"
         self.config = config
-        self.action_dim = 23
-        self.action_scaler = np.ones(self.action_dim) * 1.0
+        self.action_dim = int(config["hardware"]["action_dim"])
+        default_action_scales = np.ones(self.action_dim, dtype=np.float64)
+        cfg_action_scales = config.get("action_scales", default_action_scales)
+        if not isinstance(cfg_action_scales, (list, tuple, np.ndarray)) or len(cfg_action_scales) != self.action_dim:
+            cfg_action_scales = default_action_scales
+        self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
         self.render_mode = render_mode
         self.render_flag = render_flag
 
@@ -111,7 +116,7 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         self.mujoco_utils.init_heightmap_visualization(self.res_x, self.res_y)
 
         # Set Indices of q and qd
-        joint_names_in_order = ["left_hip_pitch_joint", "right_hip_pitch_joint",
+        self.joint_names_in_order = ["left_hip_pitch_joint", "right_hip_pitch_joint",
                             "torso_joint",
                             "left_hip_roll_joint", "right_hip_roll_joint",
                             "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
@@ -124,8 +129,8 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
                             "left_ankle_roll_joint", "right_ankle_roll_joint",
                             "left_elbow_yaw_joint", "right_elbow_yaw_joint",]
 
-        self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(joint_names_in_order)
-        self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(joint_names_in_order)
+        self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(self.joint_names_in_order)
+        self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(self.joint_names_in_order)
 
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices]
@@ -281,12 +286,15 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         return obs
 
     def initial_qpos(self):
-        qpos = np.zeros(self.model.nq)
-        qpos[2] = 1.105
-        qpos[3:7] = np.array([1, 0, 0, 0])
-        qpos[7:30] = np.zeros(23)
-        qpos[7:30] = uniform_noisy_data(qpos[7:30], lower=-self.init_noise, upper=self.init_noise)
-        return qpos
+        env_id = self.config.get("env", {}).get("id", self.id)
+        return build_initial_qpos(
+            self.model,
+            self.mujoco_utils,
+            self.config,
+            env_id=env_id,
+            init_noise=self.init_noise,
+            joint_names=self.joint_names_in_order,
+        )
     
     def event(self, event: str, value):
         if event == 'push':

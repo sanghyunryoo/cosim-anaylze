@@ -434,7 +434,7 @@ class Reporter:
             # -------------------------------
             # Final) Configuration Table
             # -------------------------------
-            filtered_config = {k: v for k, v in self.config.items() if k in ["env", "policy", "observation", "random", "hardware"]}
+            filtered_config = {k: v for k, v in self.config.items() if k in ["env", "policy", "settings", "random", "hardware", "action_scales"]}
             table_data = self._build_config_rows(filtered_config)
             MAX_ROWS_PER_PAGE = 50
             total_rows = len(table_data)
@@ -474,7 +474,7 @@ class Reporter:
                         cell.set_facecolor("#f1f1f2")
                         if col == 0:
                             left_text = cell.get_text().get_text().strip()
-                            if left_text in ["env", "policy", "observation", "random", "hardware"]:
+                            if left_text in ["env", "policy", "settings", "random", "hardware", "action_scales"]:
                                 cell.set_text_props(fontweight='bold')
 
                 if base_h is None:
@@ -491,15 +491,15 @@ class Reporter:
                         cell.get_text().set_ha("left")
                         cell.get_text().set_va("center")
 
-                # (1) Force the "observation" section header's Value cell to be empty
-                obs_header_row = None
+                # (1) Force the "settings" section header's Value cell to be empty
+                settings_header_row = None
                 for (row, col), cell in table.get_celld().items():
                     if row == 0:
                         continue
                     if col == 0:
                         left_key = cell.get_text().get_text().strip()
-                        if left_key == "observation":
-                            obs_header_row = row
+                        if left_key == "settings":
+                            settings_header_row = row
                             if (row, 1) in table.get_celld():
                                 vcell = table.get_celld()[(row, 1)]
                                 vcell.get_text().set_text("")  # Keep blank (never show text)
@@ -510,8 +510,8 @@ class Reporter:
                     # Only body rows, Value column
                     if row == 0 or col != 1:
                         continue
-                    # Never touch the observation header's Value cell
-                    if obs_header_row is not None and row == obs_header_row:
+                    # Never touch the settings header's Value cell
+                    if settings_header_row is not None and row == settings_header_row:
                         continue
 
                     # Read the left key for this row (strip indentation)
