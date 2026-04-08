@@ -408,6 +408,12 @@
 
     "torso_joint_max_torque": 60
     "torso_joint_max_vel": 20
+    "torso_yaw_joint_max_torque": 60
+    "torso_yaw_joint_max_vel": 20
+    "torso_pitch_joint_max_torque": 36
+    "torso_pitch_joint_max_vel": 53
+    "torso_roll_joint_max_torque": 36
+    "torso_roll_joint_max_vel": 53
 
     "ankle_roll_joint_max_torque": 14
     "ankle_roll_joint_max_vel": 33

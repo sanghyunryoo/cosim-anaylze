@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
     def _init_variables(self):
         self.key_mapping = {}
         self.active_keys = {}
+        self._pending_key_release_timers = {}
         self.thread = None
         self.worker = None
         self.tester = None
@@ -720,26 +721,53 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def handle_key_press(self, event):
+        key = event.key()
+        pending_timer = self._pending_key_release_timers.pop(key, None)
+        if pending_timer is not None:
+            pending_timer.stop()
+            pending_timer.deleteLater()
         if event.isAutoRepeat():
             return
-        key = event.key()
         if key in self.key_mapping and key not in self.active_keys:
             btn, cmd_index, direction = self.key_mapping[key]
             btn.setChecked(True)
             self.active_keys[key] = {"cmd_index": cmd_index, "direction": direction}
 
     def handle_key_release(self, event):
+        key = event.key()
+        if key not in self.key_mapping:
+            return
         if event.isAutoRepeat():
             return
-        key = event.key()
-        if key in self.key_mapping:
-            btn, cmd_index, _ = self.key_mapping[key]
-            btn.setChecked(False)
-            if key in self.active_keys:
-                self.active_keys.pop(key)
-            default_value = self._get_default_command_value(cmd_index)
-            self.current_command_values[cmd_index] = default_value
-            self._update_command_button(cmd_index, default_value)
+        pending_timer = self._pending_key_release_timers.get(key)
+        if pending_timer is not None:
+            pending_timer.stop()
+            pending_timer.deleteLater()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda key=key: self._finalize_key_release(key))
+        self._pending_key_release_timers[key] = timer
+        timer.start(35)
+
+    def _finalize_key_release(self, key):
+        timer = self._pending_key_release_timers.pop(key, None)
+        if timer is not None:
+            timer.deleteLater()
+        if key not in self.key_mapping:
+            return
+        btn, cmd_index, _ = self.key_mapping[key]
+        btn.setChecked(False)
+        if key in self.active_keys:
+            self.active_keys.pop(key)
+        same_command_still_active = any(
+            key_info.get("cmd_index") == cmd_index
+            for key_info in self.active_keys.values()
+        )
+        if same_command_still_active:
+            return
+        default_value = self._get_default_command_value(cmd_index)
+        self.current_command_values[cmd_index] = default_value
+        self._update_command_button(cmd_index, default_value)
 
     def _get_default_command_value(self, index):
         try:

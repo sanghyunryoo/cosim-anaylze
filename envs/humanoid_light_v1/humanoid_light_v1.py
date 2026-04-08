@@ -22,20 +22,20 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
       - elbow is 1DoF per arm: *_elbow_joint  (no elbow_pitch/yaw split)
       - wrist is 1DoF per arm: *_wrist_joint
       - head_joint included
-    Action order (26):
-      [0:2]   hip_pitch (L,R)
-      [2:5]   torso (yaw,pitch,roll)
-      [5:7]   hip_roll (L,R)
-      [7:9]   shoulder_pitch (L,R)
-      [9:11]  hip_yaw (L,R)
-      [11:13] shoulder_roll (L,R)
-      [13:15] knee (L,R)
-      [15:17] shoulder_yaw (L,R)
-      [17:19] ankle_pitch (L,R)
-      [19:21] elbow (L,R)
-      [21:23] ankle_roll (L,R)
-      [23:25] wrist (L,R)
-      [25:26] head
+    Action / dof_pos / dof_vel order (26):
+      [0:1]   head
+      [1:3]   hip_pitch (L,R)
+      [3:5]   hip_roll (L,R)
+      [5:7]   hip_yaw (L,R)
+      [7:9]   knee (L,R)
+      [9:11]  ankle_pitch (L,R)
+      [11:13] ankle_roll (L,R)
+      [13:16] torso (yaw,roll,pitch)
+      [16:18] shoulder_pitch (L,R)
+      [18:20] shoulder_roll (L,R)
+      [20:22] shoulder_yaw (L,R)
+      [22:24] elbow (L,R)
+      [24:26] wrist (L,R)
     """
 
     metadata = {"render_modes": ["human", "rgb_array", "depth_array"]}
@@ -180,35 +180,22 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
 
         # --- Controlled joint order (26) ---
         self.joint_names_in_order = [
-            # hips pitch
-            "left_hip_pitch_joint", "right_hip_pitch_joint",
-            # torso (3DoF)
-            "torso_yaw_joint",
-            # hips roll
-            "left_hip_roll_joint", "right_hip_roll_joint",
-            # torso pitch
-            "torso_pitch_joint",
-            # hips yaw
-            "left_hip_yaw_joint", "right_hip_yaw_joint",
-            # torso roll
-            "torso_roll_joint",
-            # knees
-            "left_knee_joint", "right_knee_joint",
             # head
             "head_joint",
-            # shoulders pitch
-            "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
-            # ankles pitch
+            # legs
+            "left_hip_pitch_joint", "right_hip_pitch_joint",
+            "left_hip_roll_joint", "right_hip_roll_joint",
+            "left_hip_yaw_joint", "right_hip_yaw_joint",
+            "left_knee_joint", "right_knee_joint",
             "left_ankle_pitch_joint", "right_ankle_pitch_joint",
-            # shoulders roll
-            "left_shoulder_roll_joint", "right_shoulder_roll_joint",
-            # ankles roll
             "left_ankle_roll_joint", "right_ankle_roll_joint",
-            # shoulders yaw
+            # body
+            "torso_yaw_joint", "torso_roll_joint", "torso_pitch_joint",
+            # arms
+            "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
+            "left_shoulder_roll_joint", "right_shoulder_roll_joint",
             "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",
-            # elbows (1DoF)
             "left_elbow_joint", "right_elbow_joint",
-            # wrists
             "left_wrist_joint", "right_wrist_joint",
         ]
 
@@ -259,11 +246,13 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         # --- Indices in qpos/qvel for controlled joints ---
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(self.joint_names_in_order)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(self.joint_names_in_order)
+        self.obs_joint_names_in_order = list(self.joint_names_in_order)
 
     # -----------------------
     # Observation
     # -----------------------
     def _get_obs(self):
+        # dof_pos / dof_vel follow self.obs_joint_names_in_order exactly.
         dof_pos = self.data.qpos[self.q_indices].astype(np.float64)
         dof_vel = self.data.qvel[self.qd_indices].astype(np.float64)
 
@@ -349,8 +338,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
     def step(self, action):
         self.action = np.asarray(action, dtype=np.float64)
         self.filtered_action = self.control_manager.delay_filter(self.action)
-        print(f"Step {self.local_step}: action={self.action}, filtered_action={self.filtered_action}")
-        
+
         # Pull joint positions/velocities (controlled joints only, in our order)
         dof_pos = self.data.qpos[self.q_indices].astype(np.float64)
         dof_vel = self.data.qvel[self.qd_indices].astype(np.float64)
@@ -359,52 +347,52 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         def sl(a, b):
             return slice(a, b)
 
-        s_hip_pitch   = sl(0, 2)    # L,R
-        s_torso_yaw   = sl(2, 3)    # 1
+        s_head        = sl(0, 1)    # 1
+        s_hip_pitch   = sl(1, 3)    # L,R
         s_hip_roll    = sl(3, 5)    # L,R
-        s_torso_pitch = sl(5, 6)    # 1
-        s_hip_yaw     = sl(6, 8)    # L,R
-        s_torso_roll  = sl(8, 9)    # 1
-        s_knee        = sl(9, 11)   # L,R
-        s_head        = sl(11, 12)  # 1
-        s_sh_pitch    = sl(12, 14)  # L,R
-        s_ank_pitch   = sl(14, 16)  # L,R
-        s_sh_roll     = sl(16, 18)  # L,R
-        s_ank_roll    = sl(18, 20)  # L,R
+        s_hip_yaw     = sl(5, 7)    # L,R
+        s_knee        = sl(7, 9)    # L,R
+        s_ank_pitch   = sl(9, 11)   # L,R
+        s_ank_roll    = sl(11, 13)  # L,R
+        s_torso_yaw   = sl(13, 14)  # 1
+        s_torso_roll  = sl(14, 15)  # 1
+        s_torso_pitch = sl(15, 16)  # 1
+        s_sh_pitch    = sl(16, 18)  # L,R
+        s_sh_roll     = sl(18, 20)  # L,R
         s_sh_yaw      = sl(20, 22)  # L,R
         s_elbow       = sl(22, 24)  # L,R
         s_wrist       = sl(24, 26)  # L,R
 
         # Targets (scaled actions)
-        tgt_hip_pitch   = self.filtered_action[s_hip_pitch]   * self.action_scaler[s_hip_pitch]
-        tgt_torso_yaw   = self.filtered_action[s_torso_yaw]   * self.action_scaler[s_torso_yaw]
-        tgt_hip_roll    = self.filtered_action[s_hip_roll]    * self.action_scaler[s_hip_roll]
-        tgt_torso_pitch = self.filtered_action[s_torso_pitch] * self.action_scaler[s_torso_pitch]
-        tgt_hip_yaw     = self.filtered_action[s_hip_yaw]     * self.action_scaler[s_hip_yaw]
-        tgt_torso_roll  = self.filtered_action[s_torso_roll]  * self.action_scaler[s_torso_roll]
-        tgt_knee        = self.filtered_action[s_knee]        * self.action_scaler[s_knee]
         tgt_head        = self.filtered_action[s_head]        * self.action_scaler[s_head]
-        tgt_sh_pitch    = self.filtered_action[s_sh_pitch]    * self.action_scaler[s_sh_pitch]
+        tgt_hip_pitch   = self.filtered_action[s_hip_pitch]   * self.action_scaler[s_hip_pitch]
+        tgt_hip_roll    = self.filtered_action[s_hip_roll]    * self.action_scaler[s_hip_roll]
+        tgt_hip_yaw     = self.filtered_action[s_hip_yaw]     * self.action_scaler[s_hip_yaw]
+        tgt_knee        = self.filtered_action[s_knee]        * self.action_scaler[s_knee]
         tgt_ank_pitch   = self.filtered_action[s_ank_pitch]   * self.action_scaler[s_ank_pitch]
-        tgt_sh_roll     = self.filtered_action[s_sh_roll]     * self.action_scaler[s_sh_roll]
         tgt_ank_roll    = self.filtered_action[s_ank_roll]    * self.action_scaler[s_ank_roll]
+        tgt_torso_yaw   = self.filtered_action[s_torso_yaw]   * self.action_scaler[s_torso_yaw]
+        tgt_torso_roll  = self.filtered_action[s_torso_roll]  * self.action_scaler[s_torso_roll]
+        tgt_torso_pitch = self.filtered_action[s_torso_pitch] * self.action_scaler[s_torso_pitch]
+        tgt_sh_pitch    = self.filtered_action[s_sh_pitch]    * self.action_scaler[s_sh_pitch]
+        tgt_sh_roll     = self.filtered_action[s_sh_roll]     * self.action_scaler[s_sh_roll]
         tgt_sh_yaw      = self.filtered_action[s_sh_yaw]      * self.action_scaler[s_sh_yaw]
         tgt_elbow       = self.filtered_action[s_elbow]       * self.action_scaler[s_elbow]
         tgt_wrist       = self.filtered_action[s_wrist]       * self.action_scaler[s_wrist]
 
         # Current states
-        pos_hip_pitch,   vel_hip_pitch   = dof_pos[s_hip_pitch],   dof_vel[s_hip_pitch]
-        pos_torso_yaw,   vel_torso_yaw   = dof_pos[s_torso_yaw],   dof_vel[s_torso_yaw]
-        pos_hip_roll,    vel_hip_roll    = dof_pos[s_hip_roll],    dof_vel[s_hip_roll]
-        pos_torso_pitch, vel_torso_pitch = dof_pos[s_torso_pitch], dof_vel[s_torso_pitch]
-        pos_hip_yaw,     vel_hip_yaw     = dof_pos[s_hip_yaw],     dof_vel[s_hip_yaw]
-        pos_torso_roll,  vel_torso_roll  = dof_pos[s_torso_roll],  dof_vel[s_torso_roll]
-        pos_knee,        vel_knee        = dof_pos[s_knee],        dof_vel[s_knee]
         pos_head,        vel_head        = dof_pos[s_head],        dof_vel[s_head]
-        pos_sh_pitch,    vel_sh_pitch    = dof_pos[s_sh_pitch],    dof_vel[s_sh_pitch]
+        pos_hip_pitch,   vel_hip_pitch   = dof_pos[s_hip_pitch],   dof_vel[s_hip_pitch]
+        pos_hip_roll,    vel_hip_roll    = dof_pos[s_hip_roll],    dof_vel[s_hip_roll]
+        pos_hip_yaw,     vel_hip_yaw     = dof_pos[s_hip_yaw],     dof_vel[s_hip_yaw]
+        pos_knee,        vel_knee        = dof_pos[s_knee],        dof_vel[s_knee]
         pos_ank_pitch,   vel_ank_pitch   = dof_pos[s_ank_pitch],   dof_vel[s_ank_pitch]
-        pos_sh_roll,     vel_sh_roll     = dof_pos[s_sh_roll],     dof_vel[s_sh_roll]
         pos_ank_roll,    vel_ank_roll    = dof_pos[s_ank_roll],    dof_vel[s_ank_roll]
+        pos_torso_yaw,   vel_torso_yaw   = dof_pos[s_torso_yaw],   dof_vel[s_torso_yaw]
+        pos_torso_roll,  vel_torso_roll  = dof_pos[s_torso_roll],  dof_vel[s_torso_roll]
+        pos_torso_pitch, vel_torso_pitch = dof_pos[s_torso_pitch], dof_vel[s_torso_pitch]
+        pos_sh_pitch,    vel_sh_pitch    = dof_pos[s_sh_pitch],    dof_vel[s_sh_pitch]
+        pos_sh_roll,     vel_sh_roll     = dof_pos[s_sh_roll],     dof_vel[s_sh_roll]
         pos_sh_yaw,      vel_sh_yaw      = dof_pos[s_sh_yaw],      dof_vel[s_sh_yaw]
         pos_elbow,       vel_elbow       = dof_pos[s_elbow],       dof_vel[s_elbow]
         pos_wrist,       vel_wrist       = dof_pos[s_wrist],       dof_vel[s_wrist]
@@ -498,18 +486,18 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         # Concatenate EXACTLY in joint_names_in_order
         self.applied_torques = np.concatenate(
             [
-                hip_pitch_t,     # 2
-                torso_yaw_t,     # 1
-                hip_roll_t,      # 2
-                torso_pitch_t,   # 1
-                hip_yaw_t,       # 2
-                torso_roll_t,    # 1
-                knee_t,          # 2
                 head_t,          # 1
-                sh_pitch_t,      # 2
+                hip_pitch_t,     # 2
+                hip_roll_t,      # 2
+                hip_yaw_t,       # 2
+                knee_t,          # 2
                 ank_pitch_t,     # 2
-                sh_roll_t,       # 2
                 ank_roll_t,      # 2
+                torso_yaw_t,     # 1
+                torso_roll_t,    # 1
+                torso_pitch_t,   # 1
+                sh_pitch_t,      # 2
+                sh_roll_t,       # 2
                 sh_yaw_t,        # 2
                 elbow_t,         # 2
                 wrist_t,         # 2

@@ -234,6 +234,50 @@ class Tester(QObject):
             return list(leaf_env.initial_joint_names)
         return []
 
+    def _get_observed_motor_torques(self, leaf_env, joint_names):
+        data = getattr(leaf_env, "data", None)
+        model = getattr(leaf_env, "model", None)
+        if data is None or model is None:
+            return np.asarray(getattr(leaf_env, "applied_torques", []), dtype=np.float64).reshape(-1)
+
+        actuator_force = np.asarray(getattr(data, "actuator_force", []), dtype=np.float64).reshape(-1)
+        if actuator_force.size == 0:
+            return np.asarray(getattr(leaf_env, "applied_torques", []), dtype=np.float64).reshape(-1)
+
+        actuator_names = []
+        for idx in range(actuator_force.size):
+            try:
+                actuator_names.append(str(model.actuator(idx).name))
+            except Exception:
+                actuator_names.append("")
+
+        torque_by_joint = {}
+        for name, force in zip(actuator_names, actuator_force):
+            if not name:
+                continue
+            key = str(name)
+            torque_by_joint[key] = float(force)
+            if key.endswith("_ctrl"):
+                base_key = key[:-5]
+                if base_key and base_key not in torque_by_joint:
+                    torque_by_joint[base_key] = float(force)
+
+        observed = []
+        matched = 0
+        for joint_name in joint_names:
+            key = str(joint_name)
+            if key in torque_by_joint:
+                observed.append(torque_by_joint[key])
+                matched += 1
+            else:
+                observed.append(np.nan)
+
+        observed = np.asarray(observed, dtype=np.float64)
+        if matched > 0:
+            return observed
+
+        return np.asarray(getattr(leaf_env, "applied_torques", []), dtype=np.float64).reshape(-1)
+
     def _get_monitor_snapshot(self):
         leaf_env = self._get_leaf_env()
         if leaf_env is None:
@@ -244,7 +288,7 @@ class Tester(QObject):
             return []
 
         qd_indices = getattr(leaf_env, "qd_indices", [])
-        torques = np.asarray(getattr(leaf_env, "applied_torques", []), dtype=np.float64).reshape(-1)
+        torques = self._get_observed_motor_torques(leaf_env, joint_names)
         if len(qd_indices) == 0 or torques.size == 0:
             return []
 
@@ -265,7 +309,10 @@ class Tester(QObject):
             if joint_name not in selected_set:
                 continue
             vel = float(velocities[idx])
-            tau = float(torques[idx])
+            tau_raw = torques[idx]
+            if np.isnan(tau_raw):
+                continue
+            tau = float(tau_raw)
             history = self._monitor_history.setdefault(joint_name, deque(maxlen=self._monitor_history_len))
             history.append((vel, tau))
             session_history = self._monitor_session_history.setdefault(joint_name, [])

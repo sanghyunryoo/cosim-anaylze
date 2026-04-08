@@ -291,7 +291,7 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
             or hip_roll_l_contact.any()
             or hip_roll_r_contact.any()
         )
-        return contact
+        return False
 
     def reset_model(self):
         self.local_step = 0
