@@ -238,7 +238,7 @@ class Tester(QObject):
         data = getattr(leaf_env, "data", None)
         model = getattr(leaf_env, "model", None)
         if data is None or model is None:
-            return np.asarray(getattr(leaf_env, "applied_torques", []), dtype=np.float64).reshape(-1)
+            return np.asarray(getattr(leaf_env, "applied_torques", []), dtype=np.float64).reshape(-1)   
 
         actuator_force = np.asarray(getattr(data, "actuator_force", []), dtype=np.float64).reshape(-1)
         if actuator_force.size == 0:

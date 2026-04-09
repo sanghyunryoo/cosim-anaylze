@@ -182,6 +182,53 @@
     "gear_ratio": -1.5
     "gamma": 0.98
 
+"flamingo_p_v3_1":
+  "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
+  "stack_size": 3
+  "non_stacked_obs_order": []
+  "obs_scales":
+    "dof_pos": 1.0
+    "dof_vel": 0.05
+    "ang_vel": 0.25
+    "lin_vel_x": 2.0
+    "lin_vel_y": 1.0
+    "lin_vel_z": 0.25
+  "command":
+    "command_dim": 4
+    "command_3_initial": 0
+  "command_scales":
+    "0": 2.0
+    "1": 1.0
+    "2": 0.25
+    "3": 1.0
+    "4": 1.0
+    "5": 1.0
+  "height_map":
+    "size_x": 0.8
+    "size_y": 0.8
+    "res_x": 12
+    "res_y": 12
+  "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
+  "hardware":
+    "action_dim": 8
+    "Kp_hip": 70
+    "Kp_shoulder": 70
+    "Kp_leg": 70
+    "Kd_hip": 1.0
+    "Kd_shoulder": 1.0
+    "Kd_leg": 1.0
+    "Kd_wheel": 0.7
+    "hip_max_torque": 60
+    "hip_max_vel": 20
+    "shoulder_max_torque": 60
+    "shoulder_max_vel": 20
+    "leg_max_torque": 60
+    "leg_max_vel": 20
+    "wheel_max_torque": 36
+    "wheel_max_vel": 53
+    "gear_ratio": -1.5
+    "gamma": 0.98
+
 
 
 "wheeldog_p_v0":

@@ -48,6 +48,15 @@ INITIAL_POSE_METADATA = {
             "left_wheel_joint", "right_wheel_joint",
         ],
     },
+    "flamingo_p_v3_1": {
+        "base_z": 0.642,
+        "joint_names": [
+            "left_hip_joint", "right_hip_joint",
+            "left_shoulder_joint", "right_shoulder_joint",
+            "left_leg_joint", "right_leg_joint",
+            "left_wheel_joint", "right_wheel_joint",
+        ],
+    },
     "flamingo_p_10dof": {
         "base_z": 0.615,
         "joint_names": [

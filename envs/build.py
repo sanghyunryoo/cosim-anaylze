@@ -1,5 +1,6 @@
 from envs.flamingo_light_p_v3.flamingo_light_p_v3 import FlamingoLightPV3
 from envs.flamingo_p_v3.flamingo_p_v3 import FlamingoPV3
+from envs.flamingo_p_v3_1.flamingo_p_v3 import FlamingoPV31
 from envs.flamingo_p_v3_2.flamingo_p_v3 import FlamingoPV32
 from envs.flamingo_p_10dof.flamingo_p_10dof import FlamingoP10dof
 from envs.bon_p_v1.bon_p_v1 import BonPV1
@@ -19,6 +20,8 @@ def build_env(config):
 
     if config["env"]['id'] == "flamingo_p_v3":
       env = FlamingoPV3(config)
+    elif config["env"]['id'] == "flamingo_p_v3_1":
+      env = FlamingoPV31(config)
     elif config["env"]['id'] == "flamingo_p_v3_2":
       env = FlamingoPV32(config)
     elif config["env"]['id'] == "flamingo_p_10dof":
