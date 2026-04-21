@@ -879,7 +879,7 @@ class MainWindow(QMainWindow):
         # Far right: Terminal Log
         log_v_layout = QVBoxLayout()
         log_v_layout.setSpacing(10)
-        top_h_layout.addLayout(log_v_layout, 2)
+        top_h_layout.addLayout(log_v_layout, 3)
         self._create_log_group(log_v_layout)
 
         self.status_label = QLabel("대기 중")
@@ -1274,6 +1274,7 @@ class MainWindow(QMainWindow):
 
     def _create_log_group(self, parent_layout):
         log_group = QGroupBox("Terminal Log")
+        log_group.setMinimumWidth(420)
         log_layout = QVBoxLayout(log_group)
         log_layout.setContentsMargins(8, 8, 8, 8)
         log_layout.setSpacing(6)
@@ -1282,7 +1283,7 @@ class MainWindow(QMainWindow):
         self.log_output.setReadOnly(True)
         self.log_output.setAcceptRichText(False)
         self.log_output.setLineWrapMode(QTextEdit.NoWrap)
-        self.log_output.setMinimumHeight(120)
+        self.log_output.setMinimumHeight(180)
         self.log_output.document().setMaximumBlockCount(5000)
         self.log_output.setPlaceholderText("Runtime logs will appear here.")
         fixed_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
