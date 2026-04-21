@@ -77,7 +77,7 @@ INITIAL_POSE_METADATA = {
         ],
     },
     "flamingo_light_p_v3": {
-        "base_z": 0.115,
+        "base_z": 0.13,
         "joint_names": [
             "left_shoulder_joint", "right_shoulder_joint",
             "left_wheel_joint", "right_wheel_joint",

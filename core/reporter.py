@@ -2,14 +2,24 @@ import math
 import time
 import textwrap 
 
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend for PDF export
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.patches import Rectangle, FancyBboxPatch
-import matplotlib.patheffects as pe
 import numpy as np
-from cycler import cycler
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Use non-interactive backend for PDF export
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.patches import Rectangle, FancyBboxPatch
+    import matplotlib.patheffects as pe
+    from cycler import cycler
+except Exception:
+    matplotlib = None
+    plt = None
+    PdfPages = None
+    Rectangle = None
+    FancyBboxPatch = None
+    pe = None
+    cycler = None
 
 
 palette = [
@@ -23,32 +33,31 @@ palette = [
     "#222222",  # Black
 ]
 
-# Global Matplotlib style (clean, readable for PDF)
-plt.style.use('seaborn-v0_8-whitegrid')
-plt.rcParams.update({
-    'font.family': 'sans-serif',
-    'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
-    'axes.edgecolor': '#333333',
-    'axes.linewidth': 0.8,
-    'axes.titlesize': 16,
-    'axes.titleweight': 'bold',
-    'axes.labelsize': 12,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'legend.fontsize': 10,
-    'lines.linewidth': 1.5,
-    'grid.linestyle': '--',
-    'grid.linewidth': 0.6,
-    # Subplot margins
-    'figure.subplot.left': 0.1,
-    'figure.subplot.right': 0.9,
-    'figure.subplot.bottom': 0.05,
-    'figure.subplot.top': 0.95,
-    'pdf.fonttype': 42,
-    'ps.fonttype': 42,
-    # Color palette (avoid yellow)
-    'axes.prop_cycle': cycler('color', palette)
-})
+if plt is not None and cycler is not None:
+    # Global Matplotlib style (clean, readable for PDF)
+    plt.style.use('seaborn-v0_8-whitegrid')
+    plt.rcParams.update({
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
+        'axes.edgecolor': '#333333',
+        'axes.linewidth': 0.8,
+        'axes.titlesize': 16,
+        'axes.titleweight': 'bold',
+        'axes.labelsize': 12,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'legend.fontsize': 10,
+        'lines.linewidth': 1.5,
+        'grid.linestyle': '--',
+        'grid.linewidth': 0.6,
+        'figure.subplot.left': 0.1,
+        'figure.subplot.right': 0.9,
+        'figure.subplot.bottom': 0.05,
+        'figure.subplot.top': 0.95,
+        'pdf.fonttype': 42,
+        'ps.fonttype': 42,
+        'axes.prop_cycle': cycler('color', palette)
+    })
 
 # Default marker size for time-series plots
 DEFAULT_MARKER_SIZE = 1
@@ -139,6 +148,11 @@ class Reporter:
         """
         Build the multi-page PDF report.
         """
+        if plt is None or PdfPages is None or Rectangle is None or FancyBboxPatch is None or pe is None:
+            raise RuntimeError(
+                "PDF report generation requires 'matplotlib'. Install it to enable report export."
+            )
+
         PAGE_SIZE = (8.27, 11.69)  # A4 portrait
         dt = float(self.history.get('dt', [1])[0])
         times = np.arange(self.timesteps) * dt

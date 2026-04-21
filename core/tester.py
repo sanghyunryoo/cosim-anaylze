@@ -186,7 +186,10 @@ class Tester(QObject):
             state = next_state
 
         if not self._had_error:
-            self.reporter.generate_report()
+            try:
+                self.reporter.generate_report()
+            except RuntimeError as exc:
+                print(f"[WARN] Report generation skipped: {exc}")
         self.overlayUpdated.emit({})
         self.close()
         self.finished.emit()

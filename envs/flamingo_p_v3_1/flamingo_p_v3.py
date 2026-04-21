@@ -34,7 +34,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
 
         self.render_mode = render_mode
         self.render_flag = render_flag
-
+        
         # PD control parameters
         self.kp_hip = config["hardware"]["Kp_hip"]
         self.kp_shoulder = config["hardware"]["Kp_shoulder"]
@@ -230,6 +230,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         dof_vel = self.data.qvel[self.qd_indices]
         ang_vel = self.data.sensor('angular-velocity').data.astype(np.double)
         lin_vel = self.data.sensor("linear-velocity").data.astype(np.float32)
+        base_height = float(self.data.qpos[2])
 
         # joint_state: [6개 위치, (옵션) 2개 바퀴 속도]
         joint_state = [
@@ -245,6 +246,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             "torque": self.applied_torques,
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
+            "base_height": base_height,
             "ang_vel_yaw": ang_vel[2],
             "set_points": self.action * self.action_scaler,
             "state": joint_state,

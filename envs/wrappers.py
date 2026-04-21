@@ -4,7 +4,11 @@ from typing import (Tuple, SupportsFloat)
 
 import numpy as np
 import mujoco
-from prettytable import PrettyTable
+
+try:
+    from prettytable import PrettyTable
+except Exception:
+    PrettyTable = None
 
 
 class BaseEnv(ABC):
@@ -162,6 +166,14 @@ class StateBuildWrapper(BaseEnv):
         arr = np.asarray(values, dtype=np.float64).reshape(-1)
         return "[" + ", ".join(f"{v: .4f}" for v in arr) + "]"
 
+    @staticmethod
+    def _build_text_table(title: str, headers, rows) -> str:
+        lines = [title, " | ".join(headers)]
+        lines.append("-" * max(len(lines[1]), len(title)))
+        for row in rows:
+            lines.append(" | ".join(str(col) for col in row))
+        return "\n".join(lines)
+
     def _get_robot_com_offset_in_base_frame(self):
         model = getattr(self.env, "model", None)
         data = self.env.get_data()
@@ -197,6 +209,7 @@ class StateBuildWrapper(BaseEnv):
         action_vals = self._get_action_values()
         gyro = np.asarray(obs.get("ang_vel", []), dtype=np.float64).reshape(-1)
         projected_gravity = np.asarray(obs.get("projected_gravity", []), dtype=np.float64).reshape(-1)
+        base_height = float(data.qpos[2]) if getattr(data, "qpos", None) is not None and len(data.qpos) > 2 else float("nan")
 
         try:
             quat_wxyz = np.asarray(data.sensor("orientation").data, dtype=np.float64).reshape(-1)
@@ -211,13 +224,7 @@ class StateBuildWrapper(BaseEnv):
             quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
         euler = self._quaternion_to_euler_array(quat_xyzw)
 
-        joint_table = PrettyTable()
-        joint_table.title = f"{self.id} {phase} Joint States"
-        joint_table.field_names = ["joint", "joint pos", "joint vel", "action"]
-        joint_table.align["joint"] = "l"
-        joint_table.align["joint pos"] = "r"
-        joint_table.align["joint vel"] = "r"
-        joint_table.align["action"] = "r"
+        joint_rows = []
 
         max_rows = max(len(vel_joint_names), len(pos_joint_names), len(dof_pos), len(dof_vel), len(action_vals))
         for idx in range(max_rows):
@@ -231,20 +238,39 @@ class StateBuildWrapper(BaseEnv):
             pos_val = f"{dof_pos[idx]: .6f}" if idx < len(dof_pos) else "-"
             vel_val = f"{dof_vel[idx]: .6f}" if idx < len(dof_vel) else "-"
             action_val = f"{action_vals[idx]: .6f}" if idx < len(action_vals) else "-"
-            joint_table.add_row([joint_name, pos_val, vel_val, action_val])
+            joint_rows.append([joint_name, pos_val, vel_val, action_val])
 
-        imu_table = PrettyTable()
-        imu_table.title = f"{self.id} {phase} Base State"
-        imu_table.field_names = ["signal", "value"]
-        imu_table.align["signal"] = "l"
-        imu_table.align["value"] = "l"
-        imu_table.add_row(["euler angle [roll, pitch, yaw]", self._format_vector(euler)])
-        imu_table.add_row(["gyro [x, y, z]", self._format_vector(gyro)])
-        imu_table.add_row(["projected gravity [x, y, z]", self._format_vector(projected_gravity)])
+        imu_rows = [
+            ["euler angle [roll, pitch, yaw]", self._format_vector(euler)],
+            ["gyro [x, y, z]", self._format_vector(gyro)],
+            ["projected gravity [x, y, z]", self._format_vector(projected_gravity)],
+            ["base height", f"{base_height: .6f}"],
+        ]
 
+        if PrettyTable is not None:
+            joint_table = PrettyTable()
+            joint_table.title = f"{self.id} {phase} Joint States"
+            joint_table.field_names = ["joint", "joint pos", "joint vel", "action"]
+            joint_table.align["joint"] = "l"
+            joint_table.align["joint pos"] = "r"
+            joint_table.align["joint vel"] = "r"
+            joint_table.align["action"] = "r"
+            for row in joint_rows:
+                joint_table.add_row(row)
 
-        print(joint_table)
-        print(imu_table)
+            imu_table = PrettyTable()
+            imu_table.title = f"{self.id} {phase} Base State"
+            imu_table.field_names = ["signal", "value"]
+            imu_table.align["signal"] = "l"
+            imu_table.align["value"] = "l"
+            for row in imu_rows:
+                imu_table.add_row(row)
+
+            print(joint_table)
+            print(imu_table)
+        else:
+            print(self._build_text_table(f"{self.id} {phase} Joint States", ["joint", "joint pos", "joint vel", "action"], joint_rows))
+            print(self._build_text_table(f"{self.id} {phase} Base State", ["signal", "value"], imu_rows))
 
     def _concat_obs_with_freq(self, obs, names):
         """
@@ -496,4 +522,3 @@ class CommandWrapper(BaseEnv):
 
     def close(self):
         self.env.close()
-

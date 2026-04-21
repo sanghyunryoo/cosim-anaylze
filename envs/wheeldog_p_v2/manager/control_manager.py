@@ -3,7 +3,11 @@ import random
 from collections import deque
 
 import numpy as np
-import torch
+
+try:
+    import torch
+except Exception:
+    torch = None
 
 
 class ControlManager:
@@ -49,7 +53,7 @@ class ControlManager:
         self.filtered_action = None
         self.prob = config["random"]["action_delay_prob"]
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = None if torch is None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.group_models = {}
         self.group_modes = {}
         self.group_indices = {
@@ -119,6 +123,10 @@ class ControlManager:
                 self.group_models[group] = None
                 continue
 
+            if torch is None:
+                raise RuntimeError(
+                    "The 'torch' package is required when actuator mode is set to 'actuator_net'."
+                )
             if not path:
                 raise RuntimeError(
                     f"Actuator mode for '{group}' is actuator_net, but '{path_key}' is empty."
