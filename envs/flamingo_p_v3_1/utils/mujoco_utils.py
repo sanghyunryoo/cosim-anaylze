@@ -9,7 +9,10 @@ class MuJoCoUtils:
     def __init__(self, model):
         self.model = model
         self.hf_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
-        self.site_ids = None
+        self.ground_geom_type = (
+            int(self.model.geom_type[self.hf_geom_id]) if self.hf_geom_id != -1 else -1
+        )
+        self.site_ids_by_prefix = {}
 
     def get_body_indices_by_name(self, body_names):
         """
@@ -71,7 +74,7 @@ class MuJoCoUtils:
             qvel_indices.append(self.model.jnt_dofadr[joint_id])
         return qvel_indices
     
-    def init_heightmap_visualization(self, res_x, res_y):
+    def init_heightmap_visualization(self, res_x, res_y, prefix="heightmap_site"):
         """
         Initialize site IDs for heightmap visualization.
 
@@ -87,16 +90,27 @@ class MuJoCoUtils:
         Raises:
             ValueError: If any expected site name is not found in the model's XML.
         """
-        self.site_ids = [[None for _ in range(res_x)] for _ in range(res_y)]
+        site_ids = [[None for _ in range(res_x)] for _ in range(res_y)]
         for i in range(res_y):
             for j in range(res_x):
-                name = f"heightmap_site_{i}_{j}"
+                name = f"{prefix}_{i}_{j}"
                 sid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, name)
                 if sid == -1:
                     raise ValueError(f"Site '{name}' not found in model. Check that the XML defines this site.")
-                self.site_ids[i][j] = sid
+                site_ids[i][j] = sid
+        self.site_ids_by_prefix[prefix] = site_ids
 
-    def get_height_map(self, data, size_x, size_y, res_x, res_y):
+    def get_height_map(
+        self,
+        data,
+        size_x,
+        size_y,
+        res_x,
+        res_y,
+        frame_body_name="base_link",
+        site_prefix="heightmap_site",
+        axis_body_name=None,
+    ):
         """
         Generate a heightmap by raycasting from the robot's base frame onto the ground.
 
@@ -122,15 +136,43 @@ class MuJoCoUtils:
         Raises:
             RuntimeError: If init_heightmap_visualization has not been called (self.site_ids is None).
         """
-        if self.site_ids is None:
+        site_ids = self.site_ids_by_prefix.get(site_prefix)
+        if site_ids is None:
             raise RuntimeError(
-                "Heightmap visualization sites not initialized. Call init_heightmap_visualization(res_x, res_x) first."
+                f"Heightmap visualization sites not initialized for prefix '{site_prefix}'."
             )
 
-        # Extract robot base position (x, y, z) and orientation quaternion [w, x, y, z]
-        robot_pos = data.qpos[0:3].astype(np.float64)
-        raw_quat = data.qpos[3:7].astype(np.float64)
-        R = MathUtils.quat_to_rot_matrix(raw_quat)  # 3×3 rotation matrix
+        origin_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, frame_body_name)
+        if origin_body_id == -1:
+            raise ValueError(f"Body '{frame_body_name}' not found in model.")
+        frame_pos = np.asarray(data.xpos[origin_body_id], dtype=np.float64)
+
+        axis_body_id = -1
+        if axis_body_name:
+            axis_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, axis_body_name)
+        if axis_body_id == -1:
+            axis_body_id = origin_body_id
+        R_axes = np.asarray(data.xmat[axis_body_id], dtype=np.float64).reshape(3, 3)
+        world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+        forward_axis = R_axes[:, 0].copy()
+        forward_axis[2] = 0.0
+        forward_norm = np.linalg.norm(forward_axis)
+        if forward_norm < 1e-8:
+            forward_axis = R_axes[:, 1].copy()
+            forward_axis[2] = 0.0
+            forward_norm = np.linalg.norm(forward_axis)
+        if forward_norm < 1e-8:
+            forward_axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        else:
+            forward_axis /= forward_norm
+
+        lateral_axis = np.cross(world_up, forward_axis)
+        lateral_norm = np.linalg.norm(lateral_axis)
+        if lateral_norm < 1e-8:
+            lateral_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        else:
+            lateral_axis /= lateral_norm
 
         # Define the local window in the robot's frame
         x_min_robot, x_max_robot = -size_x / 2, size_x / 2
@@ -150,9 +192,7 @@ class MuJoCoUtils:
         for i in range(num_y):
             for j in range(num_x):
                 # Local point in robot frame
-                P_robot = np.array([XX_robot[i, j], YY_robot[i, j], 0.0], dtype=np.float64)
-                # Transform to world coordinates
-                P_world = robot_pos + R.dot(P_robot)
+                P_world = frame_pos + (forward_axis * XX_robot[i, j]) + (lateral_axis * YY_robot[i, j])
 
                 # Ray origin: above the terrain point by z_max_world
                 pnt = np.array(
@@ -166,21 +206,25 @@ class MuJoCoUtils:
                 # Ray direction: straight down
                 vec = np.array([[0.0], [0.0], [-1.0]], dtype=np.float64)
 
-                # Perform raycast against heightfield
-                dist = mujoco.mj_rayHfield(self.model, data, self.hf_geom_id, pnt, vec)
-
-                if dist >= 0.0:
-                    # Terrain height = ray_origin_z − dist
-                    terrain_height = pnt[2, 0] - dist
-                    heightmap[i, j] = robot_pos[2] - terrain_height
+                if self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_HFIELD):
+                    dist = mujoco.mj_rayHfield(self.model, data, self.hf_geom_id, pnt, vec)
+                    if dist >= 0.0:
+                        terrain_height = pnt[2, 0] - dist
+                        heightmap[i, j] = frame_pos[2] - terrain_height
+                    else:
+                        terrain_height = z_min_world
+                        heightmap[i, j] = frame_pos[2] - z_min_world
+                        warnings.warn("No intersection with heightfield!")
+                elif self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_PLANE):
+                    terrain_height = 0.0
+                    heightmap[i, j] = frame_pos[2] - terrain_height
                 else:
-                    # No intersection → fallback value + warning
                     terrain_height = z_min_world
-                    heightmap[i, j] = robot_pos[2] - z_min_world
-                    warnings.warn("No intersection with heightfield!")
+                    heightmap[i, j] = frame_pos[2] - z_min_world
+                    warnings.warn("Unsupported ground geom type for height map visualization.")
 
                 # Update visualization site to the terrain contact point
-                sid = self.site_ids[i][j]
+                sid = site_ids[i][j]
                 data.site_xpos[sid][0] = P_world[0]
                 data.site_xpos[sid][1] = P_world[1]
                 data.site_xpos[sid][2] = terrain_height

@@ -6,6 +6,7 @@ import numpy as np
 import mujoco
 from core.policy import build_policy
 from core.depth_streamer import DepthStreamClient
+from core.heightmap_dataset_writer import HeightMapDatasetWriter
 from core.reporter import Reporter
 from envs.build import build_env
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -35,10 +36,18 @@ class Tester(QObject):
         self._monitor_session_history = {}
         self._monitor_history_len = 90
         self._depth_enabled = False
+        self._dataset_enabled = False
+        self._height_map_enabled = False
         self._depth_stream = None
+        self._dataset_writer = None
+        self._dataset_warned = False
+        self._height_map_cfg = {}
         self._depth_camera_name = "depth_camera"
         self._depth_update_interval = 30
-        self._depth_frame_size = (640, 480)
+        self._depth_gui_emit_interval = 30
+        self._depth_base_frame_size = (640, 480)
+        self._depth_frame_size = (80, 60)
+        self._depth_scale = 8
         self._depth_processing = {
             "max_range_m": 2.5,
             "decimation_magnitude": 3,
@@ -53,7 +62,18 @@ class Tester(QObject):
         self.config = config
         monitoring_cfg = self.config.get("monitoring", {}) or {}
         self.set_monitor_joints(monitoring_cfg.get("selected_joints", []))
-        self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False))
+        self._dataset_enabled = bool(monitoring_cfg.get("dataset_enabled", False))
+        self._height_map_cfg = monitoring_cfg.get("height_map", {}) if isinstance(monitoring_cfg.get("height_map", {}), dict) else {}
+        self._height_map_enabled = bool(self._height_map_cfg.get("enabled", False))
+        self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False)) or self._dataset_enabled
+        self._depth_scale = max(1, int(monitoring_cfg.get("depth_scale", 8) or 8))
+        base_w, base_h = self._depth_base_frame_size
+        self._depth_frame_size = (
+            max(1, int(base_w // self._depth_scale)),
+            max(1, int(base_h // self._depth_scale)),
+        )
+        self._depth_update_interval = 1 if self._dataset_enabled else 30
+        self._depth_gui_emit_interval = 30
 
     def load_policy(self, policy_path):
         self.policy_path = policy_path
@@ -168,9 +188,12 @@ class Tester(QObject):
         self._apply_pending_policy_controls()
         self.env = build_env(self.config)
         self._init_depth_stream()
+        self._init_height_map_visualization()
+        self._init_dataset_writer()
         self._monitor_history = {joint_name: deque(maxlen=self._monitor_history_len) for joint_name in self._monitor_joint_names}
         self._monitor_session_history = {joint_name: [] for joint_name in self._monitor_joint_names}
         state, info = self.env.reset()
+        self._update_height_map_visualization()
         self.env.render()
         self._emit_overlay_payload()
         self._emit_depth_payload(force=True)
@@ -199,6 +222,7 @@ class Tester(QObject):
             assert self.user_command is not None, "user_command must not be None."
             next_state, terminated, truncated, info = self.env.step(action)
             self.reporter.write_info(info)
+            self._update_height_map_visualization()
             self._emit_overlay_payload()
             self._emit_depth_payload()
             self.stepFinished.emit()
@@ -224,6 +248,13 @@ class Tester(QObject):
             if self._depth_stream is not None:
                 self._depth_stream.close()
                 self._depth_stream = None
+        except Exception:
+            pass
+        try:
+            if self._dataset_writer is not None:
+                print(f"[dataset] saved {self._dataset_writer.sample_count} samples.")
+                self._dataset_writer.close()
+                self._dataset_writer = None
         except Exception:
             pass
         try:
@@ -461,7 +492,126 @@ class Tester(QObject):
             camera_name=self._depth_camera_name,
             frame_size=self._depth_frame_size,
             processing=self._depth_processing,
+            preserve_all_frames=self._dataset_enabled,
+            queue_size=2048 if self._dataset_enabled else 2,
         )
+
+    def _init_dataset_writer(self):
+        self._dataset_writer = None
+        self._dataset_warned = False
+        if not self._dataset_enabled:
+            return
+
+        res_x = int(self._height_map_cfg.get("res_x", 0) or 0)
+        res_y = int(self._height_map_cfg.get("res_y", 0) or 0)
+        if res_x <= 0 or res_y <= 0:
+            print("[WARN] Dataset saving requested but height_map observation is disabled for this env.")
+            return
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        env_id = (self.config.get("env", {}) or {}).get("id", "")
+        output_root = os.path.join(repo_root, "envs", env_id, "dataset")
+        self._dataset_writer = HeightMapDatasetWriter(
+            env_id=env_id,
+            output_root=output_root,
+            height_map_shape=(res_y, res_x),
+            depth_shape=(self._depth_frame_size[1], self._depth_frame_size[0]),
+            depth_scale=self._depth_scale,
+        )
+        print(f"[dataset] saving samples to {self._dataset_writer.run_dir}")
+
+    def _init_height_map_visualization(self):
+        if not bool(self._height_map_cfg.get("enabled", False)):
+            return
+        leaf_env = self._get_leaf_env()
+        if leaf_env is None:
+            return
+        mujoco_utils = getattr(leaf_env, "mujoco_utils", None)
+        if mujoco_utils is None:
+            return
+        res_x = int(self._height_map_cfg.get("res_x", 0) or 0)
+        res_y = int(self._height_map_cfg.get("res_y", 0) or 0)
+        if res_x <= 0 or res_y <= 0:
+            return
+        mujoco_utils.init_heightmap_visualization(res_x, res_y, prefix="dataset_heightmap_site")
+
+    def _compute_projected_gravity(self, leaf_env):
+        model = getattr(leaf_env, "model", None)
+        data = getattr(leaf_env, "data", None)
+        if model is None or data is None:
+            return None
+
+        for body_name in ("base_link", "pelvis_link"):
+            body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if body_id != -1:
+                rot = np.asarray(data.xmat[body_id], dtype=np.float64).reshape(3, 3)
+                return (rot.T @ np.array([0.0, 0.0, -1.0], dtype=np.float64)).astype(np.float32)
+        return None
+
+    def _get_height_map_axis_body_name(self, leaf_env):
+        model = getattr(leaf_env, "model", None)
+        if model is None:
+            return str(self._height_map_cfg.get("frame_body", "camera_link"))
+        for body_name in ("base_link", "pelvis_link"):
+            body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            if body_id != -1:
+                return body_name
+        return str(self._height_map_cfg.get("frame_body", "camera_link"))
+
+    def _compute_height_map_target(self, leaf_env):
+        res_x = int(self._height_map_cfg.get("res_x", 0) or 0)
+        res_y = int(self._height_map_cfg.get("res_y", 0) or 0)
+        if res_x <= 0 or res_y <= 0:
+            return None
+        mujoco_utils = getattr(leaf_env, "mujoco_utils", None)
+        data = getattr(leaf_env, "data", None)
+        if mujoco_utils is None or data is None:
+            return None
+        return mujoco_utils.get_height_map(
+            data,
+            float(self._height_map_cfg.get("size_x", 1.0)),
+            float(self._height_map_cfg.get("size_y", 0.6)),
+            res_x,
+            res_y,
+            frame_body_name=str(self._height_map_cfg.get("frame_body", "camera_link")),
+            site_prefix="dataset_heightmap_site",
+            axis_body_name=self._get_height_map_axis_body_name(leaf_env),
+        ).astype(np.float32)
+
+    def _maybe_record_dataset(self, payload):
+        if self._dataset_writer is None or not payload or payload.get("image") is None:
+            return
+
+        leaf_env = self._get_leaf_env()
+        if leaf_env is None:
+            return
+
+        projected_gravity = self._compute_projected_gravity(leaf_env)
+        height_map = self._compute_height_map_target(leaf_env)
+        if projected_gravity is None or height_map is None:
+            if not self._dataset_warned:
+                print("[WARN] Dataset writer could not fetch projected_gravity or height_map; skipping samples.")
+                self._dataset_warned = True
+            return
+
+        self._dataset_writer.add_sample(
+            depth_frame=payload["image"],
+            projected_gravity=projected_gravity,
+            height_map=height_map,
+        )
+
+    def _update_height_map_visualization(self):
+        if not bool(self._height_map_cfg.get("visualize", False)):
+            return
+        leaf_env = self._get_leaf_env()
+        if leaf_env is None:
+            return
+        try:
+            self._compute_height_map_target(leaf_env)
+        except Exception as exc:
+            if not self._dataset_warned:
+                print(f"[WARN] Height map visualization skipped: {exc}")
+                self._dataset_warned = True
 
     def _emit_depth_payload(self, force=False):
         if self._depth_stream is None:
@@ -484,9 +634,18 @@ class Tester(QObject):
             )
 
         try:
-            payload = self._depth_stream.poll()
-            if payload is not None:
-                self.depthUpdated.emit(payload)
+            if self._dataset_enabled:
+                payloads = self._depth_stream.poll_all()
+                if payloads:
+                    for payload in payloads:
+                        self._maybe_record_dataset(payload)
+                    if force or (local_step % max(1, self._depth_gui_emit_interval)) == 0:
+                        self.depthUpdated.emit(payloads[-1])
+            else:
+                payload = self._depth_stream.poll()
+                if payload is not None:
+                    self._maybe_record_dataset(payload)
+                    self.depthUpdated.emit(payload)
         except Exception as exc:
             print(f"[WARN] Depth stream skipped: {exc}")
             self.depthUpdated.emit({})

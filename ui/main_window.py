@@ -106,6 +106,8 @@ class MainWindow(QMainWindow):
         self.initial_pose_settings_by_env = {}
         self.monitor_settings = {}
         self.monitor_settings_by_env = {}
+        self.dataset_height_map_settings = {}
+        self.dataset_height_map_settings_by_env = {}
         self.monitor_joint_checkboxes = {}
         self.fine_tune_settings = {}
         self.fine_tune_settings_by_env = {}
@@ -435,6 +437,35 @@ class MainWindow(QMainWindow):
             "selected_joints": list(default_selected),
         }
 
+    def _make_dataset_height_map_defaults(self, env_id: str):
+        env_cfg = self.env_config.get(env_id, {}) or {}
+        settings_cfg = env_cfg.get("settings", env_cfg) if isinstance(env_cfg, dict) else {}
+        hm_cfg = settings_cfg.get("height_map", {}) if isinstance(settings_cfg.get("height_map", {}), dict) else {}
+        size_x = to_float(hm_cfg.get("size_x", 1.0), 1.0)
+        size_y = to_float(hm_cfg.get("size_y", 0.6), 0.6)
+        res_x = max(1, to_int(hm_cfg.get("res_x", 15), 15))
+        resolution = size_x / res_x if res_x > 0 else 0.1
+        return {
+            "size_x": str(size_x),
+            "size_y": str(size_y),
+            "resolution": str(resolution),
+            "visualize": False,
+            "frame_body": "camera_link",
+            "depth_scale": "8",
+        }
+
+    def _ensure_dataset_height_map_defaults(self):
+        env_id = self.env_id_cb.currentText()
+        if env_id not in self.dataset_height_map_settings_by_env:
+            self.dataset_height_map_settings_by_env[env_id] = self._make_dataset_height_map_defaults(env_id)
+        self.dataset_height_map_settings = dict(self.dataset_height_map_settings_by_env[env_id])
+
+    def _compute_height_map_grid(self, size_x: float, size_y: float, resolution: float):
+        resolution = max(float(resolution), 1e-6)
+        res_x = max(1, int(np.floor((float(size_x) / resolution) + 1e-9)))
+        res_y = max(1, int(np.floor((float(size_y) / resolution) + 1e-9)))
+        return res_x, res_y
+
     def _ensure_monitor_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.monitor_settings_by_env:
@@ -506,14 +537,24 @@ class MainWindow(QMainWindow):
     def _refresh_depth_controls(self, env_id: str):
         has_depth = self._env_has_depth_camera(env_id)
         self.depth_window_toggle_cb.blockSignals(True)
+        self.depth_dataset_save_cb.blockSignals(True)
         self.depth_window_toggle_cb.setEnabled(has_depth)
+        self.depth_dataset_save_cb.setEnabled(has_depth)
+        self.depth_scale_le.setEnabled(has_depth)
+        self.hm_size_x_le.setEnabled(has_depth)
+        self.hm_size_y_le.setEnabled(has_depth)
+        self.hm_resolution_le.setEnabled(has_depth)
+        self.hm_visualize_cb.setEnabled(has_depth)
         if not has_depth:
             self.depth_window_toggle_cb.setChecked(False)
+            self.depth_dataset_save_cb.setChecked(False)
+            self.hm_visualize_cb.setChecked(False)
             self.depth_status_label.setText("Unavailable")
             self.depth_image_widget.clear_frame()
         else:
             self.depth_status_label.setText("Low-rate")
         self.depth_window_toggle_cb.blockSignals(False)
+        self.depth_dataset_save_cb.blockSignals(False)
 
     def _on_depth_window_toggled(self, checked):
         if not checked:
@@ -726,6 +767,12 @@ class MainWindow(QMainWindow):
             self.monitor_settings = self._make_monitor_defaults(new_env_id)
             self.monitor_settings_by_env[new_env_id] = dict(self.monitor_settings)
 
+        if new_env_id in self.dataset_height_map_settings_by_env:
+            self.dataset_height_map_settings = dict(self.dataset_height_map_settings_by_env[new_env_id])
+        else:
+            self.dataset_height_map_settings = self._make_dataset_height_map_defaults(new_env_id)
+            self.dataset_height_map_settings_by_env[new_env_id] = dict(self.dataset_height_map_settings)
+
         cmd_cfg = settings.get("command", {}) if isinstance(settings.get("command", {}), dict) else {}
 
         # UI upper bounds (example retained)
@@ -746,6 +793,15 @@ class MainWindow(QMainWindow):
         else:
             self.observation_settings = self._make_observation_defaults(new_env_id)
             self.obs_settings_by_env[new_env_id] = (self.observation_settings).copy()
+
+        if hasattr(self, "hm_size_x_le"):
+            self.hm_size_x_le.setText(str(self.dataset_height_map_settings.get("size_x", "1.0")))
+            self.hm_size_y_le.setText(str(self.dataset_height_map_settings.get("size_y", "0.6")))
+            self.hm_resolution_le.setText(str(self.dataset_height_map_settings.get("resolution", "0.1")))
+            self.depth_scale_le.setText(str(self.dataset_height_map_settings.get("depth_scale", "8")))
+            self.hm_visualize_cb.blockSignals(True)
+            self.hm_visualize_cb.setChecked(bool(self.dataset_height_map_settings.get("visualize", False)))
+            self.hm_visualize_cb.blockSignals(False)
 
         self._refresh_monitor_joint_checkboxes()
         self._refresh_depth_controls(new_env_id)
@@ -1059,11 +1115,38 @@ class MainWindow(QMainWindow):
         depth_row_layout.setSpacing(6)
         self.depth_window_toggle_cb = QCheckBox("Window")
         self.depth_window_toggle_cb.toggled.connect(self._on_depth_window_toggled)
+        self.depth_dataset_save_cb = QCheckBox("Save")
+        self.depth_scale_le = QLineEdit("8")
+        self.depth_scale_le.setFixedWidth(40)
         self.depth_status_label = QLabel("Unavailable")
         self.depth_status_label.setStyleSheet("color: #64748B;")
         depth_row_layout.addWidget(self.depth_window_toggle_cb)
+        depth_row_layout.addWidget(self.depth_dataset_save_cb)
+        depth_row_layout.addWidget(QLabel("Scale"))
+        depth_row_layout.addWidget(self.depth_scale_le)
         depth_row_layout.addWidget(self.depth_status_label, 1)
         env_layout.addRow("Depth:", depth_row)
+
+        hm_row = QWidget()
+        hm_row_layout = QHBoxLayout(hm_row)
+        hm_row_layout.setContentsMargins(0, 0, 0, 0)
+        hm_row_layout.setSpacing(6)
+        self.hm_size_x_le = QLineEdit("1.0")
+        self.hm_size_x_le.setFixedWidth(48)
+        self.hm_size_y_le = QLineEdit("0.6")
+        self.hm_size_y_le.setFixedWidth(48)
+        self.hm_resolution_le = QLineEdit("0.1")
+        self.hm_resolution_le.setFixedWidth(48)
+        self.hm_visualize_cb = QCheckBox("Viz")
+        hm_row_layout.addWidget(QLabel("X(fwd)"))
+        hm_row_layout.addWidget(self.hm_size_x_le)
+        hm_row_layout.addWidget(QLabel("Y(lat)"))
+        hm_row_layout.addWidget(self.hm_size_y_le)
+        hm_row_layout.addWidget(QLabel("Res"))
+        hm_row_layout.addWidget(self.hm_resolution_le)
+        hm_row_layout.addWidget(self.hm_visualize_cb)
+        hm_row_layout.addStretch(1)
+        env_layout.addRow("Height Map:", hm_row)
 
         self.terrain_id_cb = NoWheelComboBox()
         self.terrain_id_cb.addItems([
@@ -1750,6 +1833,30 @@ class MainWindow(QMainWindow):
                     for joint_name, value in (self.initial_pose_settings.get("joints", {})).items()
                 }
             }
+            hm_size_x = to_float(self.hm_size_x_le.text(), 1.0)
+            hm_size_y = to_float(self.hm_size_y_le.text(), 0.6)
+            hm_resolution = to_float(self.hm_resolution_le.text(), 0.1)
+            depth_scale = max(1, to_int(self.depth_scale_le.text(), 8))
+            hm_res_x, hm_res_y = self._compute_height_map_grid(hm_size_x, hm_size_y, hm_resolution)
+            dataset_height_map = {
+                "enabled": bool(self.depth_dataset_save_cb.isChecked()) or bool(self.hm_visualize_cb.isChecked()),
+                "visualize": bool(self.hm_visualize_cb.isChecked()),
+                "frame_body": "camera_link",
+                "size_x": hm_size_x,
+                "size_y": hm_size_y,
+                "resolution": hm_resolution,
+                "res_x": hm_res_x,
+                "res_y": hm_res_y,
+            }
+            self.dataset_height_map_settings = {
+                "size_x": str(dataset_height_map["size_x"]),
+                "size_y": str(dataset_height_map["size_y"]),
+                "resolution": str(dataset_height_map["resolution"]),
+                "visualize": dataset_height_map["visualize"],
+                "frame_body": dataset_height_map["frame_body"],
+                "depth_scale": str(depth_scale),
+            }
+            self.dataset_height_map_settings_by_env[self.env_id_cb.currentText()] = dict(self.dataset_height_map_settings)
 
             # settings: copy latest settings for the current env
             env_id = self.env_id_cb.currentText()
@@ -1817,6 +1924,9 @@ class MainWindow(QMainWindow):
                 "monitoring": {
                     "selected_joints": list(self.monitor_settings.get("selected_joints", [])),
                     "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()),
+                    "dataset_enabled": bool(self.depth_dataset_save_cb.isChecked()),
+                    "depth_scale": depth_scale,
+                    "height_map": dataset_height_map,
                 },
                 "fine_tune": {
                     "enabled": bool(fine_tune_cfg.get("enabled", False)),

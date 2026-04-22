@@ -54,7 +54,15 @@ def _normalize_depth_to_u8(depth_m: np.ndarray, max_range_m: float) -> np.ndarra
     return ((1.0 - normalized) * 255.0).astype(np.uint8)
 
 
-def _depth_worker(input_queue, output_queue, model_path: str, camera_name: str, frame_size, processing):
+def _depth_worker(
+    input_queue,
+    output_queue,
+    model_path: str,
+    camera_name: str,
+    frame_size,
+    processing,
+    preserve_all_frames: bool,
+):
     model = mujoco.MjModel.from_xml_path(model_path)
     data = mujoco.MjData(model)
     width, height = frame_size
@@ -67,16 +75,17 @@ def _depth_worker(input_queue, output_queue, model_path: str, camera_name: str, 
             if item is None:
                 break
 
-            # Drain queued states so depth always follows the latest snapshot.
-            while True:
-                try:
-                    newer = input_queue.get_nowait()
-                except queue.Empty:
-                    break
-                if newer is None:
-                    item = None
-                    break
-                item = newer
+            if not preserve_all_frames:
+                # Drain queued states so depth always follows the latest snapshot.
+                while True:
+                    try:
+                        newer = input_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if newer is None:
+                        item = None
+                        break
+                    item = newer
 
             if item is None:
                 break
@@ -131,11 +140,12 @@ def _depth_worker(input_queue, output_queue, model_path: str, camera_name: str, 
                 "resolution": f"{width}x{height}@60",
                 "max_range_m": max_range_m,
             }
-            try:
-                while True:
-                    output_queue.get_nowait()
-            except queue.Empty:
-                pass
+            if not preserve_all_frames:
+                try:
+                    while True:
+                        output_queue.get_nowait()
+                except queue.Empty:
+                    pass
             output_queue.put(payload)
     finally:
         try:
@@ -145,14 +155,32 @@ def _depth_worker(input_queue, output_queue, model_path: str, camera_name: str, 
 
 
 class DepthStreamClient:
-    def __init__(self, model_path: str, camera_name: str = "depth_camera", frame_size=(640, 480), processing=None):
+    def __init__(
+        self,
+        model_path: str,
+        camera_name: str = "depth_camera",
+        frame_size=(640, 480),
+        processing=None,
+        preserve_all_frames: bool = False,
+        queue_size: int = 2,
+    ):
         ctx = mp.get_context("spawn")
-        self._input_queue = ctx.Queue(maxsize=2)
-        self._output_queue = ctx.Queue(maxsize=2)
+        queue_size = max(2, int(queue_size))
+        self._input_queue = ctx.Queue(maxsize=queue_size)
+        self._output_queue = ctx.Queue(maxsize=queue_size)
+        self._preserve_all_frames = bool(preserve_all_frames)
         processing = dict(processing or {})
         self._process = ctx.Process(
             target=_depth_worker,
-            args=(self._input_queue, self._output_queue, model_path, camera_name, frame_size, processing),
+            args=(
+                self._input_queue,
+                self._output_queue,
+                model_path,
+                camera_name,
+                frame_size,
+                processing,
+                self._preserve_all_frames,
+            ),
             daemon=True,
         )
         self._process.start()
@@ -166,6 +194,8 @@ class DepthStreamClient:
         try:
             self._input_queue.put_nowait(payload)
         except queue.Full:
+            if self._preserve_all_frames:
+                return False
             try:
                 self._input_queue.get_nowait()
             except queue.Empty:
@@ -173,7 +203,8 @@ class DepthStreamClient:
             try:
                 self._input_queue.put_nowait(payload)
             except queue.Full:
-                pass
+                return False
+        return True
 
     def poll(self) -> Optional[dict]:
         latest = None
@@ -183,6 +214,15 @@ class DepthStreamClient:
             except queue.Empty:
                 break
         return latest
+
+    def poll_all(self):
+        payloads = []
+        while True:
+            try:
+                payloads.append(self._output_queue.get_nowait())
+            except queue.Empty:
+                break
+        return payloads
 
     def close(self):
         try:
