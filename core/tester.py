@@ -569,8 +569,10 @@ class Tester(QObject):
             return None
         return mujoco_utils.get_height_map(
             data,
-            float(self._height_map_cfg.get("size_x", 1.0)),
-            float(self._height_map_cfg.get("size_y", 0.6)),
+            float(self._height_map_cfg.get("x_forward", float(self._height_map_cfg.get("size_x", 1.0)) / 2.0)),
+            float(self._height_map_cfg.get("x_backward", float(self._height_map_cfg.get("size_x", 1.0)) / 2.0)),
+            float(self._height_map_cfg.get("y_left", float(self._height_map_cfg.get("size_y", 0.6)) / 2.0)),
+            float(self._height_map_cfg.get("y_right", float(self._height_map_cfg.get("size_y", 0.6)) / 2.0)),
             res_x,
             res_y,
             frame_body_name=str(self._height_map_cfg.get("frame_body", "camera_link")),

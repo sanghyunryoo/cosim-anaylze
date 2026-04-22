@@ -148,7 +148,7 @@ class MainWindow(QMainWindow):
             "stack_size": 3,
             "command_dim": 6,
             "command_scales": {"0": 1.0, "1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0, "5": 1.0},
-            "height_map": {"size_x": 1.0, "size_y": 0.6, "res_x": 15, "res_y": 9, "freq": 50, "scale": 1.0},
+            "height_map": {"size_x": 1.0, "size_y": 0.6, "res_x": 10, "res_y": 6, "freq": 50, "scale": 1.0},
             "dof_pos": None,
             "dof_vel": None,
             "lin_vel_x": None,
@@ -443,12 +443,16 @@ class MainWindow(QMainWindow):
         hm_cfg = settings_cfg.get("height_map", {}) if isinstance(settings_cfg.get("height_map", {}), dict) else {}
         size_x = to_float(hm_cfg.get("size_x", 1.0), 1.0)
         size_y = to_float(hm_cfg.get("size_y", 0.6), 0.6)
-        res_x = max(1, to_int(hm_cfg.get("res_x", 15), 15))
-        resolution = size_x / res_x if res_x > 0 else 0.1
+        x_forward = to_float(hm_cfg.get("x_forward", size_x / 2.0), size_x / 2.0)
+        x_backward = to_float(hm_cfg.get("x_backward", size_x / 2.0), size_x / 2.0)
+        y_left = to_float(hm_cfg.get("y_left", size_y / 2.0), size_y / 2.0)
+        y_right = to_float(hm_cfg.get("y_right", size_y / 2.0), size_y / 2.0)
         return {
-            "size_x": str(size_x),
-            "size_y": str(size_y),
-            "resolution": str(resolution),
+            "x_forward": str(x_forward),
+            "x_backward": str(x_backward),
+            "y_left": str(y_left),
+            "y_right": str(y_right),
+            "resolution": "0.1",
             "visualize": False,
             "frame_body": "camera_link",
             "depth_scale": "8",
@@ -460,10 +464,19 @@ class MainWindow(QMainWindow):
             self.dataset_height_map_settings_by_env[env_id] = self._make_dataset_height_map_defaults(env_id)
         self.dataset_height_map_settings = dict(self.dataset_height_map_settings_by_env[env_id])
 
-    def _compute_height_map_grid(self, size_x: float, size_y: float, resolution: float):
+    def _compute_height_map_grid(
+        self,
+        x_forward: float,
+        x_backward: float,
+        y_left: float,
+        y_right: float,
+        resolution: float,
+    ):
         resolution = max(float(resolution), 1e-6)
-        res_x = max(1, int(np.floor((float(size_x) / resolution) + 1e-9)))
-        res_y = max(1, int(np.floor((float(size_y) / resolution) + 1e-9)))
+        size_x = max(0.0, float(x_forward)) + max(0.0, float(x_backward))
+        size_y = max(0.0, float(y_left)) + max(0.0, float(y_right))
+        res_x = max(1, int(np.floor((size_x / resolution) + 1e-9)))
+        res_y = max(1, int(np.floor((size_y / resolution) + 1e-9)))
         return res_x, res_y
 
     def _ensure_monitor_defaults(self):
@@ -541,8 +554,10 @@ class MainWindow(QMainWindow):
         self.depth_window_toggle_cb.setEnabled(has_depth)
         self.depth_dataset_save_cb.setEnabled(has_depth)
         self.depth_scale_le.setEnabled(has_depth)
-        self.hm_size_x_le.setEnabled(has_depth)
-        self.hm_size_y_le.setEnabled(has_depth)
+        self.hm_x_fwd_le.setEnabled(has_depth)
+        self.hm_x_bwd_le.setEnabled(has_depth)
+        self.hm_y_left_le.setEnabled(has_depth)
+        self.hm_y_right_le.setEnabled(has_depth)
         self.hm_resolution_le.setEnabled(has_depth)
         self.hm_visualize_cb.setEnabled(has_depth)
         if not has_depth:
@@ -794,9 +809,11 @@ class MainWindow(QMainWindow):
             self.observation_settings = self._make_observation_defaults(new_env_id)
             self.obs_settings_by_env[new_env_id] = (self.observation_settings).copy()
 
-        if hasattr(self, "hm_size_x_le"):
-            self.hm_size_x_le.setText(str(self.dataset_height_map_settings.get("size_x", "1.0")))
-            self.hm_size_y_le.setText(str(self.dataset_height_map_settings.get("size_y", "0.6")))
+        if hasattr(self, "hm_x_fwd_le"):
+            self.hm_x_fwd_le.setText(str(self.dataset_height_map_settings.get("x_forward", "0.5")))
+            self.hm_x_bwd_le.setText(str(self.dataset_height_map_settings.get("x_backward", "0.5")))
+            self.hm_y_left_le.setText(str(self.dataset_height_map_settings.get("y_left", "0.3")))
+            self.hm_y_right_le.setText(str(self.dataset_height_map_settings.get("y_right", "0.3")))
             self.hm_resolution_le.setText(str(self.dataset_height_map_settings.get("resolution", "0.1")))
             self.depth_scale_le.setText(str(self.dataset_height_map_settings.get("depth_scale", "8")))
             self.hm_visualize_cb.blockSignals(True)
@@ -1131,17 +1148,25 @@ class MainWindow(QMainWindow):
         hm_row_layout = QHBoxLayout(hm_row)
         hm_row_layout.setContentsMargins(0, 0, 0, 0)
         hm_row_layout.setSpacing(6)
-        self.hm_size_x_le = QLineEdit("1.0")
-        self.hm_size_x_le.setFixedWidth(48)
-        self.hm_size_y_le = QLineEdit("0.6")
-        self.hm_size_y_le.setFixedWidth(48)
+        self.hm_x_fwd_le = QLineEdit("0.5")
+        self.hm_x_fwd_le.setFixedWidth(48)
+        self.hm_x_bwd_le = QLineEdit("0.5")
+        self.hm_x_bwd_le.setFixedWidth(48)
+        self.hm_y_left_le = QLineEdit("0.3")
+        self.hm_y_left_le.setFixedWidth(48)
+        self.hm_y_right_le = QLineEdit("0.3")
+        self.hm_y_right_le.setFixedWidth(48)
         self.hm_resolution_le = QLineEdit("0.1")
         self.hm_resolution_le.setFixedWidth(48)
         self.hm_visualize_cb = QCheckBox("Viz")
-        hm_row_layout.addWidget(QLabel("X(fwd)"))
-        hm_row_layout.addWidget(self.hm_size_x_le)
-        hm_row_layout.addWidget(QLabel("Y(lat)"))
-        hm_row_layout.addWidget(self.hm_size_y_le)
+        hm_row_layout.addWidget(QLabel("X"))
+        hm_row_layout.addWidget(self.hm_x_fwd_le)
+        hm_row_layout.addWidget(QLabel("-X"))
+        hm_row_layout.addWidget(self.hm_x_bwd_le)
+        hm_row_layout.addWidget(QLabel("Y"))
+        hm_row_layout.addWidget(self.hm_y_left_le)
+        hm_row_layout.addWidget(QLabel("-Y"))
+        hm_row_layout.addWidget(self.hm_y_right_le)
         hm_row_layout.addWidget(QLabel("Res"))
         hm_row_layout.addWidget(self.hm_resolution_le)
         hm_row_layout.addWidget(self.hm_visualize_cb)
@@ -1833,15 +1858,29 @@ class MainWindow(QMainWindow):
                     for joint_name, value in (self.initial_pose_settings.get("joints", {})).items()
                 }
             }
-            hm_size_x = to_float(self.hm_size_x_le.text(), 1.0)
-            hm_size_y = to_float(self.hm_size_y_le.text(), 0.6)
+            hm_x_forward = to_float(self.hm_x_fwd_le.text(), 0.5)
+            hm_x_backward = to_float(self.hm_x_bwd_le.text(), 0.5)
+            hm_y_left = to_float(self.hm_y_left_le.text(), 0.3)
+            hm_y_right = to_float(self.hm_y_right_le.text(), 0.3)
             hm_resolution = to_float(self.hm_resolution_le.text(), 0.1)
             depth_scale = max(1, to_int(self.depth_scale_le.text(), 8))
-            hm_res_x, hm_res_y = self._compute_height_map_grid(hm_size_x, hm_size_y, hm_resolution)
+            hm_size_x = hm_x_forward + hm_x_backward
+            hm_size_y = hm_y_left + hm_y_right
+            hm_res_x, hm_res_y = self._compute_height_map_grid(
+                hm_x_forward,
+                hm_x_backward,
+                hm_y_left,
+                hm_y_right,
+                hm_resolution,
+            )
             dataset_height_map = {
                 "enabled": bool(self.depth_dataset_save_cb.isChecked()) or bool(self.hm_visualize_cb.isChecked()),
                 "visualize": bool(self.hm_visualize_cb.isChecked()),
                 "frame_body": "camera_link",
+                "x_forward": hm_x_forward,
+                "x_backward": hm_x_backward,
+                "y_left": hm_y_left,
+                "y_right": hm_y_right,
                 "size_x": hm_size_x,
                 "size_y": hm_size_y,
                 "resolution": hm_resolution,
@@ -1849,8 +1888,10 @@ class MainWindow(QMainWindow):
                 "res_y": hm_res_y,
             }
             self.dataset_height_map_settings = {
-                "size_x": str(dataset_height_map["size_x"]),
-                "size_y": str(dataset_height_map["size_y"]),
+                "x_forward": str(dataset_height_map["x_forward"]),
+                "x_backward": str(dataset_height_map["x_backward"]),
+                "y_left": str(dataset_height_map["y_left"]),
+                "y_right": str(dataset_height_map["y_right"]),
                 "resolution": str(dataset_height_map["resolution"]),
                 "visualize": dataset_height_map["visualize"],
                 "frame_body": dataset_height_map["frame_body"],
@@ -1867,19 +1908,31 @@ class MainWindow(QMainWindow):
             env_cfg = self.env_config.get(env_id, {}) or {}
             env_settings_cfg = env_cfg.get("settings", env_cfg) if isinstance(env_cfg, dict) else {}
             yaml_hm = env_settings_cfg.get("height_map", {}) if isinstance(env_settings_cfg.get("height_map", {}), dict) else {}
+            yaml_size_x = to_float(yaml_hm.get("size_x", 1.0), 1.0)
+            yaml_size_y = to_float(yaml_hm.get("size_y", 0.6), 0.6)
             yaml_hm_defaults = {
-                "size_x": to_float(yaml_hm.get("size_x", 1.0)),
-                "size_y": to_float(yaml_hm.get("size_y", 0.6)),
+                "x_forward": to_float(yaml_hm.get("x_forward", yaml_size_x / 2.0), yaml_size_x / 2.0),
+                "x_backward": to_float(yaml_hm.get("x_backward", yaml_size_x / 2.0), yaml_size_x / 2.0),
+                "y_left": to_float(yaml_hm.get("y_left", yaml_size_y / 2.0), yaml_size_y / 2.0),
+                "y_right": to_float(yaml_hm.get("y_right", yaml_size_y / 2.0), yaml_size_y / 2.0),
+                "size_x": yaml_size_x,
+                "size_y": yaml_size_y,
                 "res_x": to_int(yaml_hm.get("res_x", 15)),
                 "res_y": to_int(yaml_hm.get("res_y", 9)),
+                "resolution": to_float(yaml_hm.get("resolution", 0.1), 0.1),
             }
 
             hm_val = settings_cfg.get("height_map", None)
             if isinstance(hm_val, dict):
+                hm_val.setdefault("x_forward", yaml_hm_defaults["x_forward"])
+                hm_val.setdefault("x_backward", yaml_hm_defaults["x_backward"])
+                hm_val.setdefault("y_left", yaml_hm_defaults["y_left"])
+                hm_val.setdefault("y_right", yaml_hm_defaults["y_right"])
                 hm_val.setdefault("size_x", yaml_hm_defaults["size_x"])
                 hm_val.setdefault("size_y", yaml_hm_defaults["size_y"])
                 hm_val.setdefault("res_x", yaml_hm_defaults["res_x"])
                 hm_val.setdefault("res_y", yaml_hm_defaults["res_y"])
+                hm_val.setdefault("resolution", yaml_hm_defaults["resolution"])
                 hm_val.setdefault("freq", 50)
                 hm_val.setdefault("scale", 1.0)
                 settings_cfg["height_map"] = hm_val

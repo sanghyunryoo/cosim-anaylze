@@ -101,8 +101,10 @@ class MuJoCoUtils:
     def get_height_map(
         self,
         data,
-        size_x,
-        size_y,
+        x_forward,
+        x_backward,
+        y_left,
+        y_right,
         res_x,
         res_y,
         frame_body_name="base_link",
@@ -122,8 +124,10 @@ class MuJoCoUtils:
 
         Args:
             data: MuJoCo mjData instance containing the current simulation state (including qpos).
-            size_x (float): Width of the heightmap window in meters (robot’s local frame).
-            size_y (float): Depth of the heightmap window in meters (robot’s local frame).
+            x_forward (float): Forward extent from the origin in meters.
+            x_backward (float): Backward extent from the origin in meters.
+            y_left (float): Left extent from the origin in meters.
+            y_right (float): Right extent from the origin in meters.
             res_x (int): Number of columns (sampling points) along the x dimension.
             res_y (int): Number of rows (sampling points) along the y dimension.
 
@@ -173,8 +177,8 @@ class MuJoCoUtils:
             lateral_axis /= lateral_norm
 
         # Define the local window in the robot's frame
-        x_min_robot, x_max_robot = -size_x / 2, size_x / 2
-        y_min_robot, y_max_robot = -size_y / 2, size_y / 2
+        x_min_robot, x_max_robot = -float(x_backward), float(x_forward)
+        y_min_robot, y_max_robot = -float(y_right), float(y_left)
         num_x, num_y = res_x, res_y
 
         # Ray parameters
