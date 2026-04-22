@@ -3,7 +3,9 @@ from collections import deque
 
 import glfw
 import numpy as np
+import mujoco
 from core.policy import build_policy
+from core.depth_streamer import DepthStreamClient
 from core.reporter import Reporter
 from envs.build import build_env
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -13,6 +15,7 @@ class Tester(QObject):
     finished = pyqtSignal()
     stepFinished = pyqtSignal()
     overlayUpdated = pyqtSignal(dict)
+    depthUpdated = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -31,11 +34,17 @@ class Tester(QObject):
         self._monitor_history = {}
         self._monitor_session_history = {}
         self._monitor_history_len = 90
+        self._depth_enabled = False
+        self._depth_stream = None
+        self._depth_camera_name = "depth_camera"
+        self._depth_update_interval = 15
+        self._depth_frame_size = (128, 96)
 
     def load_config(self, config):
         self.config = config
         monitoring_cfg = self.config.get("monitoring", {}) or {}
         self.set_monitor_joints(monitoring_cfg.get("selected_joints", []))
+        self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False))
 
     def load_policy(self, policy_path):
         self.policy_path = policy_path
@@ -149,11 +158,13 @@ class Tester(QObject):
         )
         self._apply_pending_policy_controls()
         self.env = build_env(self.config)
+        self._init_depth_stream()
         self._monitor_history = {joint_name: deque(maxlen=self._monitor_history_len) for joint_name in self._monitor_joint_names}
         self._monitor_session_history = {joint_name: [] for joint_name in self._monitor_joint_names}
         state, info = self.env.reset()
         self.env.render()
         self._emit_overlay_payload()
+        self._emit_depth_payload(force=True)
         done = False
         print(state.shape)
         while not done and not self._stop:
@@ -180,6 +191,7 @@ class Tester(QObject):
             next_state, terminated, truncated, info = self.env.step(action)
             self.reporter.write_info(info)
             self._emit_overlay_payload()
+            self._emit_depth_payload()
             self.stepFinished.emit()
 
             done = terminated or truncated
@@ -191,6 +203,7 @@ class Tester(QObject):
             except RuntimeError as exc:
                 print(f"[WARN] Report generation skipped: {exc}")
         self.overlayUpdated.emit({})
+        self.depthUpdated.emit({})
         self.close()
         self.finished.emit()
 
@@ -198,6 +211,12 @@ class Tester(QObject):
         self._stop = True
 
     def close(self):
+        try:
+            if self._depth_stream is not None:
+                self._depth_stream.close()
+                self._depth_stream = None
+        except Exception:
+            pass
         try:
             self.env.close()
         except Exception:
@@ -408,6 +427,59 @@ class Tester(QObject):
         leaf_env = self._get_leaf_env()
         dt = 1.0 / float(getattr(leaf_env, "control_freq", 50.0)) if leaf_env is not None else 0.02
         self.overlayUpdated.emit({"env_id": env_id, "dt": dt, "joints": snapshot})
+
+    def _init_depth_stream(self):
+        self._depth_stream = None
+        if not self._depth_enabled:
+            return
+
+        leaf_env = self._get_leaf_env()
+        if leaf_env is None:
+            return
+        model = getattr(leaf_env, "model", None)
+        if model is None:
+            return
+        model_path = getattr(leaf_env, "model_path", "")
+        if not model_path:
+            return
+
+        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, self._depth_camera_name)
+        if camera_id == -1:
+            return
+
+        self._depth_stream = DepthStreamClient(
+            model_path=model_path,
+            camera_name=self._depth_camera_name,
+            frame_size=self._depth_frame_size,
+        )
+
+    def _emit_depth_payload(self, force=False):
+        if self._depth_stream is None:
+            if force:
+                self.depthUpdated.emit({})
+            return
+
+        leaf_env = self._get_leaf_env()
+        if leaf_env is None:
+            if force:
+                self.depthUpdated.emit({})
+            return
+
+        local_step = int(getattr(leaf_env, "local_step", 0))
+        if force or (local_step % max(1, self._depth_update_interval)) == 0:
+            self._depth_stream.submit(
+                env_id=(self.config.get("env", {}) or {}).get("id", ""),
+                qpos=np.asarray(leaf_env.data.qpos, dtype=np.float64),
+                qvel=np.asarray(leaf_env.data.qvel, dtype=np.float64),
+            )
+
+        try:
+            payload = self._depth_stream.poll()
+            if payload is not None:
+                self.depthUpdated.emit(payload)
+        except Exception as exc:
+            print(f"[WARN] Depth stream skipped: {exc}")
+            self.depthUpdated.emit({})
 
     def get_monitor_export_payload(self):
         env_id = (self.config.get("env", {}) or {}).get("id", "")

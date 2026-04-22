@@ -13,7 +13,7 @@ from PyQt5.QtCore import QThread, Qt, QEvent, QUrl, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QDesktopServices, QFont, QFontDatabase, QIcon, QColor, QTextCharFormat, QTextCursor
 from core.tester import Tester
 from ui.utils import to_float, to_int, normalize_numkey_float_values
-from ui.custom_widgets import MujocoOverlayWidget, NoWheelComboBox, NoWheelSlider, NonClickableButton
+from ui.custom_widgets import DepthImageWidget, MujocoOverlayWidget, NoWheelComboBox, NoWheelSlider, NonClickableButton
 from ui.dialogs.action_scale_settings import ActionScaleSettingsDialog
 from ui.dialogs.actuator_settings import ActuatorSettingsDialog
 from ui.dialogs.hardware_settings import HardwareSettingsDialog
@@ -112,6 +112,8 @@ class MainWindow(QMainWindow):
         self.fine_tune_bias_dialog = None
         self.mujoco_overlay = MujocoOverlayWidget()
         self.mujoco_overlay.closed.connect(self._on_monitor_overlay_closed)
+        self.depth_image_widget = DepthImageWidget()
+        self.depth_image_widget.closed.connect(self._on_depth_widget_closed)
         self._log_emitter = _QtLogEmitter()
         self._stdout_stream = None
         self._stderr_stream = None
@@ -487,6 +489,47 @@ class MainWindow(QMainWindow):
             self.monitor_window_toggle_cb.setChecked(False)
             self.monitor_window_toggle_cb.blockSignals(False)
 
+    def _env_has_depth_camera(self, env_id: str) -> bool:
+        xml_map = {
+            "wheeldog_p_v2": os.path.join("envs", "wheeldog_p_v2", "assets", "xml", "wheeldog_p_v2.xml"),
+            "flamingo_p_v3_1": os.path.join("envs", "flamingo_p_v3_1", "assets", "xml", "flamingo_p_v3.xml"),
+        }
+        rel_path = xml_map.get(str(env_id).strip())
+        if not rel_path:
+            return False
+        xml_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", rel_path))
+        if not os.path.isfile(xml_path):
+            return False
+        with open(xml_path, "r", encoding="utf-8") as handle:
+            return 'camera name="depth_camera"' in handle.read()
+
+    def _refresh_depth_controls(self, env_id: str):
+        has_depth = self._env_has_depth_camera(env_id)
+        self.depth_window_toggle_cb.blockSignals(True)
+        self.depth_window_toggle_cb.setEnabled(has_depth)
+        if not has_depth:
+            self.depth_window_toggle_cb.setChecked(False)
+            self.depth_status_label.setText("Unavailable")
+            self.depth_image_widget.clear_frame()
+        else:
+            self.depth_status_label.setText("Low-rate")
+        self.depth_window_toggle_cb.blockSignals(False)
+
+    def _on_depth_window_toggled(self, checked):
+        if not checked:
+            self.depth_image_widget.clear_frame()
+
+    def _update_depth_overlay(self, payload):
+        if not hasattr(self, "depth_window_toggle_cb") or not self.depth_window_toggle_cb.isChecked():
+            return
+        self.depth_image_widget.update_depth(payload if isinstance(payload, dict) else {})
+
+    def _on_depth_widget_closed(self):
+        if hasattr(self, "depth_window_toggle_cb"):
+            self.depth_window_toggle_cb.blockSignals(True)
+            self.depth_window_toggle_cb.setChecked(False)
+            self.depth_window_toggle_cb.blockSignals(False)
+
     def _show_monitor_plot_if_enabled(self):
         if not hasattr(self, "monitor_save_cb") or not self.monitor_save_cb.isChecked():
             return
@@ -705,6 +748,7 @@ class MainWindow(QMainWindow):
             self.obs_settings_by_env[new_env_id] = (self.observation_settings).copy()
 
         self._refresh_monitor_joint_checkboxes()
+        self._refresh_depth_controls(new_env_id)
         self._sync_fine_tune_controls_from_cache()
 
     def showEvent(self, event):
@@ -1008,6 +1052,18 @@ class MainWindow(QMainWindow):
         monitor_row_layout.addWidget(self.monitor_save_cb)
         monitor_row_layout.addWidget(self.monitor_summary_label, 1)
         env_layout.addRow("Monitor:", monitor_row)
+
+        depth_row = QWidget()
+        depth_row_layout = QHBoxLayout(depth_row)
+        depth_row_layout.setContentsMargins(0, 0, 0, 0)
+        depth_row_layout.setSpacing(6)
+        self.depth_window_toggle_cb = QCheckBox("Window")
+        self.depth_window_toggle_cb.toggled.connect(self._on_depth_window_toggled)
+        self.depth_status_label = QLabel("Unavailable")
+        self.depth_status_label.setStyleSheet("color: #64748B;")
+        depth_row_layout.addWidget(self.depth_window_toggle_cb)
+        depth_row_layout.addWidget(self.depth_status_label, 1)
+        env_layout.addRow("Depth:", depth_row)
 
         self.terrain_id_cb = NoWheelComboBox()
         self.terrain_id_cb.addItems([
@@ -1650,6 +1706,7 @@ class MainWindow(QMainWindow):
         self.tester.load_config(config)
         self.tester.load_policy(policy_file_path)
         self.tester.overlayUpdated.connect(self._update_monitor_overlay)
+        self.tester.depthUpdated.connect(self._update_depth_overlay)
         if self.policy_type_cb.currentText().strip().lower() == "encoder+mlp":
             if not encoder_file_path or not os.path.isfile(encoder_file_path):
                 self._restore_log_streams()
@@ -1759,6 +1816,7 @@ class MainWindow(QMainWindow):
                 "initial_positions": initial_positions,
                 "monitoring": {
                     "selected_joints": list(self.monitor_settings.get("selected_joints", [])),
+                    "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()),
                 },
                 "fine_tune": {
                     "enabled": bool(fine_tune_cfg.get("enabled", False)),
@@ -1785,6 +1843,7 @@ class MainWindow(QMainWindow):
     def _reset_ui_after_test(self):
         self._restore_log_streams()
         self.mujoco_overlay.clear_overlay()
+        self.depth_image_widget.clear_frame()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.status_label.setText("Waiting ...")
@@ -1837,6 +1896,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Test stop error: {e}")
 
     def closeEvent(self, event):
+        self.depth_image_widget.clear_frame()
         self._restore_log_streams()
         self.mujoco_overlay.clear_overlay()
         super().closeEvent(event)

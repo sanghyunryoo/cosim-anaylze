@@ -1,8 +1,10 @@
 import math
 
+import numpy as np
+
 from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontMetrics, QImage, QLinearGradient, QPainter, QPainterPath, QPen
-from PyQt5.QtWidgets import QComboBox, QPushButton, QSlider, QWidget
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtWidgets import QComboBox, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 
 class NoWheelComboBox(QComboBox):
@@ -318,3 +320,95 @@ class MujocoOverlayWidget(QWidget):
         self._payload = {}
         self.closed.emit()
         super().closeEvent(event)
+
+
+class DepthImageWidget(QWidget):
+    closed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__(None)
+        self._pixmap = None
+        self.resize(420, 340)
+        self.setMinimumSize(280, 220)
+        self.setWindowTitle("Depth Image")
+        self.setStyleSheet("background-color: #050505; color: #E2E8F0;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self.info_label = QLabel("No depth frame")
+        layout.addWidget(self.info_label)
+
+        self.image_label = QLabel("Depth image unavailable")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet(
+            "background-color: #000000; border: 1px solid #334155; border-radius: 8px;"
+        )
+        layout.addWidget(self.image_label, 1)
+
+    def clear_frame(self):
+        self._pixmap = None
+        self.info_label.setText("No depth frame")
+        self.image_label.setText("Depth image unavailable")
+        self.image_label.setPixmap(QPixmap())
+        self.hide()
+
+    def update_depth(self, payload: dict):
+        if not payload or payload.get("image") is None:
+            self.clear_frame()
+            return
+
+        raw_image = np.asarray(payload.get("image"))
+        if raw_image.dtype == np.uint8:
+            depth_u8 = raw_image
+        else:
+            image = raw_image.astype(np.float32)
+            if image.ndim != 2 or image.size == 0:
+                self.clear_frame()
+                return
+
+            valid = np.isfinite(image)
+            if not np.any(valid):
+                depth_u8 = np.zeros_like(image, dtype=np.uint8)
+            else:
+                finite_vals = image[valid]
+                lo = float(np.min(finite_vals))
+                hi = float(np.percentile(finite_vals, 95.0))
+                if hi <= lo + 1e-6:
+                    hi = lo + 1e-6
+                normalized = np.clip((image - lo) / (hi - lo), 0.0, 1.0)
+                depth_u8 = ((1.0 - normalized) * 255.0).astype(np.uint8)
+
+        if depth_u8.ndim != 2 or depth_u8.size == 0:
+            self.clear_frame()
+            return
+
+        height, width = depth_u8.shape
+        qimage = QImage(depth_u8.data, width, height, width, QImage.Format_Grayscale8).copy()
+        self._pixmap = QPixmap.fromImage(qimage)
+        env_id = str(payload.get("env_id", "robot"))
+        self.setWindowTitle(f"Depth Image | {env_id}")
+        self.info_label.setText(f"{env_id} | depth_camera | {width}x{height}")
+        self._refresh_pixmap()
+        self.show()
+        self.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh_pixmap()
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
+
+    def _refresh_pixmap(self):
+        if self._pixmap is None:
+            return
+        scaled = self._pixmap.scaled(
+            self.image_label.size(),
+            Qt.KeepAspectRatio,
+            Qt.FastTransformation,
+        )
+        self.image_label.setPixmap(scaled)
+        self.image_label.setText("")

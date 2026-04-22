@@ -180,6 +180,7 @@
                           fullinertia="0.00000906773 0.00006093253 0.00006028447 -0.00000000528 0.00000089626 0.00000001601"/>
                 <geom type="mesh" mesh="camera_link"
                       rgba="0 1 0 1"/>
+                <camera name="depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="90"/>
             </body>
         </body>
     </worldbody>
