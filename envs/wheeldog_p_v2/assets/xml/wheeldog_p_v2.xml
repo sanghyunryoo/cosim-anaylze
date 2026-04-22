@@ -148,6 +148,17 @@
             </body>
         </body>
         </body>
+        <body name="camera_link"
+              pos="0.211858343080146 0.000632972309653035 -0.0842872752858781"
+              quat="0.27123040676455135 -0.6517512623783331 0.6548081265390032 -0.2699642121709208">
+            <inertial
+                pos="-0.00047920613905808 3.01154151763905E-05 -0.0125657257519306"
+                mass="0.1"
+                fullinertia="0.000114545143970138 0.000771596132968229 0.000763742678007925
+                             3.03595147302054E-06 -1.13423804692718E-05 -1.5193621964E-07"/>
+            <geom name="camera_link_collision" pos="0 0 0" type="mesh" mesh="camera_link" class="collision"/>
+            <geom name="camera_link_visual"    pos="0 0 0" type="mesh" mesh="camera_link" class="visual"/>
+        </body>
         </body>
     </worldbody>
 
@@ -157,7 +168,7 @@
         <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
         <material name="rubber" rgba="0.4 0.4 0.4 1" shininess="0.5" reflectance="0.2"/>
 
-        <mesh name="base_link" file="../mesh/base_link_fixed.STL"/>
+        <mesh name="base_link" file="../mesh/base_link_cam.STL"/>
         <mesh name="FL_hip_link"      file="../mesh/FL_hip_link.STL"/>
         <mesh name="FL_shoulder_link" file="../mesh/FL_shoulder_link.STL"/>
         <mesh name="FL_leg_link"      file="../mesh/FL_leg_link.STL"/>
@@ -174,6 +185,7 @@
         <mesh name="RR_shoulder_link" file="../mesh/RR_shoulder_link.STL"/>
         <mesh name="RR_leg_link"      file="../mesh/RR_leg_link.STL"/>
         <mesh name="RR_wheel_link"    file="../mesh/RR_wheel_link.STL"/>
+        <mesh name="camera_link" file="../mesh/camera_link.STL"/>
 
         <hfield name="rocky_easy" file="../terrain/rocky_easy.png" nrow="512" ncol="512" size="140 140 0.1 0.1"/>
         <hfield name="rocky_hard" file="../terrain/rocky_hard.png" nrow="512" ncol="512" size="140 140 0.25 0.1"/>
