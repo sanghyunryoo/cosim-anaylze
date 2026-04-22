@@ -37,8 +37,17 @@ class Tester(QObject):
         self._depth_enabled = False
         self._depth_stream = None
         self._depth_camera_name = "depth_camera"
-        self._depth_update_interval = 15
-        self._depth_frame_size = (128, 96)
+        self._depth_update_interval = 30
+        self._depth_frame_size = (640, 480)
+        self._depth_processing = {
+            "max_range_m": 2.5,
+            "decimation_magnitude": 3,
+            "spatial_magnitude": 2,
+            "spatial_alpha": 0.5,
+            "spatial_delta": 20.0,
+            "temporal_alpha": 0.4,
+            "temporal_delta": 20.0,
+        }
 
     def load_config(self, config):
         self.config = config
@@ -451,6 +460,7 @@ class Tester(QObject):
             model_path=model_path,
             camera_name=self._depth_camera_name,
             frame_size=self._depth_frame_size,
+            processing=self._depth_processing,
         )
 
     def _emit_depth_payload(self, force=False):

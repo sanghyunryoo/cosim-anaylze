@@ -158,7 +158,7 @@
                              3.03595147302054E-06 -1.13423804692718E-05 -1.5193621964E-07"/>
             <geom name="camera_link_collision" pos="0 0 0" type="mesh" mesh="camera_link" class="collision"/>
             <geom name="camera_link_visual"    pos="0 0 0" type="mesh" mesh="camera_link" class="visual"/>
-            <camera name="depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="90"/>
+            <camera name="depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="58"/>
         </body>
         </body>
     </worldbody>
