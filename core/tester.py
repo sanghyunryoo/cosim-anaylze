@@ -42,6 +42,7 @@ class Tester(QObject):
         self._dataset_writer = None
         self._dataset_warned = False
         self._height_map_cfg = {}
+        self._depth_randomization_cfg = {}
         self._depth_camera_name = "depth_camera"
         self._depth_update_interval = 30
         self._depth_gui_emit_interval = 30
@@ -64,6 +65,7 @@ class Tester(QObject):
         self.set_monitor_joints(monitoring_cfg.get("selected_joints", []))
         self._dataset_enabled = bool(monitoring_cfg.get("dataset_enabled", False))
         self._height_map_cfg = monitoring_cfg.get("height_map", {}) if isinstance(monitoring_cfg.get("height_map", {}), dict) else {}
+        self._depth_randomization_cfg = monitoring_cfg.get("depth_randomization", {}) if isinstance(monitoring_cfg.get("depth_randomization", {}), dict) else {}
         self._height_map_enabled = bool(self._height_map_cfg.get("enabled", False))
         self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False)) or self._dataset_enabled
         self._depth_scale = max(1, int(monitoring_cfg.get("depth_scale", 8) or 8))
@@ -492,6 +494,7 @@ class Tester(QObject):
             camera_name=self._depth_camera_name,
             frame_size=self._depth_frame_size,
             processing=self._depth_processing,
+            randomization=self._depth_randomization_cfg,
             preserve_all_frames=self._dataset_enabled,
             queue_size=2048 if self._dataset_enabled else 2,
         )

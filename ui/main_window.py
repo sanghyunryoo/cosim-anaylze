@@ -20,7 +20,9 @@ from ui.dialogs.hardware_settings import HardwareSettingsDialog
 from ui.dialogs.observation_settings import ObservationSettingsDialog
 from ui.dialogs.initial_pose_settings import InitialPoseSettingsDialog
 from ui.dialogs.fine_tune_bias_editor import FineTuneBiasEditorDialog
-from ui.workers import TesterWorker
+from ui.dialogs.depth_randomization_settings import DepthRandomizationSettingsDialog
+from ui.dialogs.vision_train_dialog import VisionTrainDialog
+from ui.workers import TesterWorker, VisionTrainerWorker
 from PyQt5.QtWidgets import QSizePolicy
 from envs.initial_pose import get_default_initial_joint_map, get_initial_pose_joint_names
 
@@ -90,6 +92,9 @@ class MainWindow(QMainWindow):
         self._pending_key_release_timers = {}
         self.thread = None
         self.worker = None
+        self.vision_train_thread = None
+        self.vision_train_worker = None
+        self.vision_train_dialog = None
         self.tester = None
         self.current_command_values = [0.0] * 6
         self.command_sensitivity_le_list = []
@@ -108,10 +113,16 @@ class MainWindow(QMainWindow):
         self.monitor_settings_by_env = {}
         self.dataset_height_map_settings = {}
         self.dataset_height_map_settings_by_env = {}
+        self.depth_randomization_settings = {}
+        self.depth_randomization_settings_by_env = {}
         self.monitor_joint_checkboxes = {}
         self.fine_tune_settings = {}
         self.fine_tune_settings_by_env = {}
         self.fine_tune_bias_dialog = None
+        self.vision_train_settings = {}
+        self.vision_train_settings_by_env = {}
+        self._vision_last_summary = None
+        self._vision_last_summary_by_env = {}
         self.mujoco_overlay = MujocoOverlayWidget()
         self.mujoco_overlay.closed.connect(self._on_monitor_overlay_closed)
         self.depth_image_widget = DepthImageWidget()
@@ -350,6 +361,107 @@ class MainWindow(QMainWindow):
             "bias": [0.0] * action_dim,
         }
 
+    def _make_vision_train_defaults(self, env_id: str):
+        _ = env_id
+        return {
+            "epochs": "10",
+            "batch_size": "64",
+            "learning_rate": "1e-3",
+            "latent_dim": "128",
+            "hidden_dim": "128",
+            "val_ratio": "0.1",
+            "seed": "42",
+            "selected_datasets": [],
+        }
+
+    def _ensure_vision_train_defaults(self):
+        env_id = self.env_id_cb.currentText()
+        if env_id not in self.vision_train_settings_by_env:
+            self.vision_train_settings_by_env[env_id] = self._make_vision_train_defaults(env_id)
+        self.vision_train_settings = dict(self.vision_train_settings_by_env[env_id])
+
+    def _sync_vision_train_controls_from_cache(self):
+        self._ensure_vision_train_defaults()
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.set_env_id(self.env_id_cb.currentText())
+            self.vision_train_dialog.set_settings(self.vision_train_settings)
+        self._update_vision_train_status_label()
+
+    def _collect_vision_train_ui_settings(self, source_settings=None):
+        self._ensure_vision_train_defaults()
+        source = dict(source_settings or self.vision_train_settings)
+        settings = {
+            "epochs": str(source.get("epochs", self.vision_train_settings.get("epochs", "10"))).strip(),
+            "batch_size": str(source.get("batch_size", self.vision_train_settings.get("batch_size", "64"))).strip(),
+            "learning_rate": str(source.get("learning_rate", self.vision_train_settings.get("learning_rate", "1e-3"))).strip(),
+            "latent_dim": str(source.get("latent_dim", self.vision_train_settings.get("latent_dim", "128"))).strip(),
+            "hidden_dim": str(source.get("hidden_dim", self.vision_train_settings.get("hidden_dim", "128"))).strip(),
+            "val_ratio": str(source.get("val_ratio", self.vision_train_settings.get("val_ratio", "0.1"))).strip(),
+            "seed": str(source.get("seed", self.vision_train_settings.get("seed", "42"))).strip(),
+            "selected_datasets": list(source.get("selected_datasets", self.vision_train_settings.get("selected_datasets", []))),
+        }
+        env_id = self.env_id_cb.currentText()
+        self.vision_train_settings = settings
+        self.vision_train_settings_by_env[env_id] = dict(settings)
+        return settings
+
+    def _repo_root(self):
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+    def _vision_dataset_root(self, env_id: str):
+        return os.path.join(self._repo_root(), "envs", env_id, "dataset", "height_map_supervision")
+
+    def _list_vision_train_datasets(self, env_id: str):
+        dataset_root = self._vision_dataset_root(env_id)
+        if not os.path.isdir(dataset_root):
+            return []
+
+        datasets = []
+        run_names = sorted(
+            [
+                name for name in os.listdir(dataset_root)
+                if os.path.isdir(os.path.join(dataset_root, name))
+            ],
+            reverse=True,
+        )
+        for run_name in run_names:
+            dataset_path = os.path.join(dataset_root, run_name, "dataset.npz")
+            if not os.path.isfile(dataset_path):
+                continue
+            try:
+                with np.load(dataset_path) as payload:
+                    samples = int(payload["height_map"].shape[0])
+                    depth_shape = tuple(int(v) for v in payload["depth_history"].shape[1:])
+                    height_shape = tuple(int(v) for v in payload["height_map"].shape[1:])
+            except Exception:
+                samples = 0
+                depth_shape = ()
+                height_shape = ()
+            shape_text = ""
+            if depth_shape and height_shape:
+                shape_text = f" | depth {depth_shape} -> hm {height_shape}"
+            datasets.append({
+                "path": dataset_path,
+                "label": f"{run_name} | {samples} samples{shape_text}",
+            })
+        return datasets
+
+    def _refresh_vision_train_dialog(self):
+        if self.vision_train_dialog is None:
+            return
+        env_id = self.env_id_cb.currentText()
+        self._ensure_vision_train_defaults()
+        self.vision_train_dialog.set_env_id(env_id)
+        self.vision_train_dialog.set_settings(self.vision_train_settings)
+        self.vision_train_dialog.set_available_datasets(
+            self._list_vision_train_datasets(env_id),
+            self.vision_train_settings.get("selected_datasets", []),
+        )
+        self.vision_train_dialog.set_running(
+            self.vision_train_thread is not None and self.vision_train_thread.isRunning()
+        )
+        self._update_vision_train_status_label()
+
     def _ensure_fine_tune_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.fine_tune_settings_by_env:
@@ -458,11 +570,37 @@ class MainWindow(QMainWindow):
             "depth_scale": "8",
         }
 
+    def _make_depth_randomization_defaults(self, env_id: str):
+        _ = env_id
+        return {
+            "enabled": False,
+            "camera_xyz_shift_m": "0.01",
+            "camera_pitch_shift_deg": "1.0",
+            "camera_fov_shift_deg": "1.0",
+            "gaussian_prob": "0.3",
+            "gaussian_stddev": "0.01",
+            "rotation_prob": "0.3",
+            "rotation_deg": "2.0",
+            "edge_noise_prob": "0.3",
+            "edge_noise_ratio": "0.03",
+            "small_object_prob": "0.3",
+            "small_object_ratio": "0.02",
+            "small_object_count": "6",
+            "spot_noise_prob": "0.3",
+            "spot_noise_ratio": "0.03",
+        }
+
     def _ensure_dataset_height_map_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.dataset_height_map_settings_by_env:
             self.dataset_height_map_settings_by_env[env_id] = self._make_dataset_height_map_defaults(env_id)
         self.dataset_height_map_settings = dict(self.dataset_height_map_settings_by_env[env_id])
+
+    def _ensure_depth_randomization_defaults(self):
+        env_id = self.env_id_cb.currentText()
+        if env_id not in self.depth_randomization_settings_by_env:
+            self.depth_randomization_settings_by_env[env_id] = self._make_depth_randomization_defaults(env_id)
+        self.depth_randomization_settings = dict(self.depth_randomization_settings_by_env[env_id])
 
     def _compute_height_map_grid(
         self,
@@ -567,7 +705,7 @@ class MainWindow(QMainWindow):
             self.depth_status_label.setText("Unavailable")
             self.depth_image_widget.clear_frame()
         else:
-            self.depth_status_label.setText("Low-rate")
+            self.depth_status_label.setText("")
         self.depth_window_toggle_cb.blockSignals(False)
         self.depth_dataset_save_cb.blockSignals(False)
 
@@ -788,6 +926,12 @@ class MainWindow(QMainWindow):
             self.dataset_height_map_settings = self._make_dataset_height_map_defaults(new_env_id)
             self.dataset_height_map_settings_by_env[new_env_id] = dict(self.dataset_height_map_settings)
 
+        if new_env_id in self.depth_randomization_settings_by_env:
+            self.depth_randomization_settings = dict(self.depth_randomization_settings_by_env[new_env_id])
+        else:
+            self.depth_randomization_settings = self._make_depth_randomization_defaults(new_env_id)
+            self.depth_randomization_settings_by_env[new_env_id] = dict(self.depth_randomization_settings)
+
         cmd_cfg = settings.get("command", {}) if isinstance(settings.get("command", {}), dict) else {}
 
         # UI upper bounds (example retained)
@@ -823,6 +967,10 @@ class MainWindow(QMainWindow):
         self._refresh_monitor_joint_checkboxes()
         self._refresh_depth_controls(new_env_id)
         self._sync_fine_tune_controls_from_cache()
+        self._vision_last_summary = self._vision_last_summary_by_env.get(new_env_id)
+        self._sync_vision_train_controls_from_cache()
+        if self.vision_train_dialog is not None and self.vision_train_dialog.isVisible():
+            self._refresh_vision_train_dialog()
 
     def showEvent(self, event):
         self.centralWidget().setFocus()
@@ -1108,6 +1256,10 @@ class MainWindow(QMainWindow):
         obs_settings_btn.clicked.connect(self.open_observation_settings)
         env_layout.addRow("Settings:", obs_settings_btn)
 
+        depth_randomize_btn = QPushButton("Depth Randomize")
+        depth_randomize_btn.clicked.connect(self.open_depth_randomization_settings)
+        env_layout.addRow("Depth Aug:", depth_randomize_btn)
+
         monitor_row = QWidget()
         monitor_row_layout = QHBoxLayout(monitor_row)
         monitor_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -1135,12 +1287,16 @@ class MainWindow(QMainWindow):
         self.depth_dataset_save_cb = QCheckBox("Save")
         self.depth_scale_le = QLineEdit("8")
         self.depth_scale_le.setFixedWidth(40)
+        self.hm_train_btn = QPushButton("Train")
+        self.hm_train_btn.setFixedWidth(72)
+        self.hm_train_btn.clicked.connect(self.open_vision_train_dialog)
         self.depth_status_label = QLabel("Unavailable")
         self.depth_status_label.setStyleSheet("color: #64748B;")
         depth_row_layout.addWidget(self.depth_window_toggle_cb)
         depth_row_layout.addWidget(self.depth_dataset_save_cb)
         depth_row_layout.addWidget(QLabel("Scale"))
         depth_row_layout.addWidget(self.depth_scale_le)
+        depth_row_layout.addWidget(self.hm_train_btn)
         depth_row_layout.addWidget(self.depth_status_label, 1)
         env_layout.addRow("Depth:", depth_row)
 
@@ -1159,6 +1315,8 @@ class MainWindow(QMainWindow):
         self.hm_resolution_le = QLineEdit("0.1")
         self.hm_resolution_le.setFixedWidth(48)
         self.hm_visualize_cb = QCheckBox("Viz")
+        self.vision_status_inline_label = QLabel("")
+        self.vision_status_inline_label.setStyleSheet("color: #64748B;")
         hm_row_layout.addWidget(QLabel("X"))
         hm_row_layout.addWidget(self.hm_x_fwd_le)
         hm_row_layout.addWidget(QLabel("-X"))
@@ -1170,7 +1328,7 @@ class MainWindow(QMainWindow):
         hm_row_layout.addWidget(QLabel("Res"))
         hm_row_layout.addWidget(self.hm_resolution_le)
         hm_row_layout.addWidget(self.hm_visualize_cb)
-        hm_row_layout.addStretch(1)
+        hm_row_layout.addWidget(self.vision_status_inline_label, 1)
         env_layout.addRow("Height Map:", hm_row)
 
         self.terrain_id_cb = NoWheelComboBox()
@@ -1345,6 +1503,52 @@ class MainWindow(QMainWindow):
         fine_layout.addRow("Status:", self.fine_tune_status_label)
 
         parent_layout.addWidget(fine_tune_group)
+
+    def _create_vision_train_group(self, parent_layout):
+        vision_group = QGroupBox("Vision Train")
+        vision_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 5px; margin-top: 10px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }"
+        )
+        vision_layout = QFormLayout(vision_group)
+        vision_layout.setLabelAlignment(Qt.AlignRight)
+        vision_layout.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        vision_layout.setSpacing(8)
+
+        self.vision_epochs_le = QLineEdit("10")
+        vision_layout.addRow("Epochs:", self.vision_epochs_le)
+
+        self.vision_batch_size_le = QLineEdit("64")
+        vision_layout.addRow("Batch size:", self.vision_batch_size_le)
+
+        self.vision_lr_le = QLineEdit("1e-3")
+        vision_layout.addRow("Learning rate:", self.vision_lr_le)
+
+        self.vision_latent_dim_le = QLineEdit("128")
+        vision_layout.addRow("Latent dim:", self.vision_latent_dim_le)
+
+        self.vision_hidden_dim_le = QLineEdit("128")
+        vision_layout.addRow("Hidden dim:", self.vision_hidden_dim_le)
+
+        self.vision_val_ratio_le = QLineEdit("0.1")
+        vision_layout.addRow("Val ratio:", self.vision_val_ratio_le)
+
+        self.vision_seed_le = QLineEdit("42")
+        vision_layout.addRow("Seed:", self.vision_seed_le)
+
+        self.vision_train_btn = QPushButton("Train Predictor")
+        self.vision_train_btn.clicked.connect(self.train_vision_predictor)
+        vision_layout.addRow("Train:", self.vision_train_btn)
+
+        self.vision_export_btn = QPushButton("Export Predictor ONNX")
+        self.vision_export_btn.clicked.connect(self.export_vision_predictor_onnx)
+        vision_layout.addRow("Export:", self.vision_export_btn)
+
+        self.vision_status_label = QLabel("idle")
+        self.vision_status_label.setWordWrap(True)
+        vision_layout.addRow("Status:", self.vision_status_label)
+
+        parent_layout.addWidget(vision_group)
 
     def _create_command_settings_group(self, parent_layout):
         command_group = QGroupBox("Command Settings")
@@ -1727,6 +1931,148 @@ class MainWindow(QMainWindow):
         self._update_fine_tune_status_label()
         QMessageBox.information(self, "Fine-tune", f"Merged ONNX exported to:\n{exported}")
 
+    def _update_vision_train_status_label(self):
+        settings = self.vision_train_settings if self.vision_train_settings else self._collect_vision_train_ui_settings()
+        if self.vision_train_thread is not None and self.vision_train_thread.isRunning():
+            status_text = "training..."
+            if hasattr(self, "vision_status_inline_label"):
+                self.vision_status_inline_label.setText(status_text)
+            if self.vision_train_dialog is not None:
+                self.vision_train_dialog.set_status(status_text)
+            return
+        if isinstance(self._vision_last_summary, dict):
+            status_text = (
+                f"trained | samples: {self._vision_last_summary.get('samples', 0)} | "
+                f"val: {self._vision_last_summary.get('best_val_loss', 0.0):.6f}"
+            )
+            if hasattr(self, "vision_status_inline_label"):
+                self.vision_status_inline_label.setText(status_text)
+            if self.vision_train_dialog is not None:
+                self.vision_train_dialog.set_status(status_text)
+            return
+        status_text = ""
+        if hasattr(self, "vision_status_inline_label"):
+            self.vision_status_inline_label.setText(status_text)
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.set_status(status_text)
+
+    def open_vision_train_dialog(self):
+        self._ensure_vision_train_defaults()
+        if self.vision_train_dialog is None:
+            self.vision_train_dialog = VisionTrainDialog(self)
+            self.vision_train_dialog.trainRequested.connect(self.train_vision_predictor)
+            self.vision_train_dialog.exportRequested.connect(self.export_vision_predictor_onnx)
+            self.vision_train_dialog.refreshRequested.connect(self._refresh_vision_train_dialog)
+        self._refresh_vision_train_dialog()
+        self.vision_train_dialog.show()
+        self.vision_train_dialog.raise_()
+        self.vision_train_dialog.activateWindow()
+
+    def train_vision_predictor(self):
+        if self.vision_train_thread is not None and self.vision_train_thread.isRunning():
+            QMessageBox.warning(self, "Vision Train", "Vision predictor training is already running.")
+            return
+
+        dialog_settings = self.vision_train_dialog.get_settings() if self.vision_train_dialog is not None else None
+        settings = self._collect_vision_train_ui_settings(dialog_settings)
+        env_id = self.env_id_cb.currentText()
+        dataset_paths = list(settings.get("selected_datasets", []))
+        if not dataset_paths:
+            QMessageBox.warning(self, "Vision Train", "Select at least one dataset for training.")
+            return
+        run_name = "latest"
+        repo_root = self._repo_root()
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.clear_log()
+            self.vision_train_dialog.set_running(True)
+        self.vision_train_thread = QThread()
+        self.vision_train_worker = VisionTrainerWorker(
+            repo_root=repo_root,
+            env_id=env_id,
+            dataset_paths=dataset_paths,
+            settings={
+                "epochs": to_int(settings.get("epochs", 10), 10),
+                "batch_size": to_int(settings.get("batch_size", 64), 64),
+                "learning_rate": to_float(settings.get("learning_rate", 1e-3), 1e-3),
+                "latent_dim": to_int(settings.get("latent_dim", 128), 128),
+                "hidden_dim": to_int(settings.get("hidden_dim", 128), 128),
+                "val_ratio": to_float(settings.get("val_ratio", 0.1), 0.1),
+                "seed": to_int(settings.get("seed", 42), 42),
+                "run_name": run_name,
+            },
+        )
+        self.vision_train_worker.moveToThread(self.vision_train_thread)
+        self.vision_train_thread.started.connect(self.vision_train_worker.run)
+        self.vision_train_worker.log.connect(self.on_vision_train_log)
+        self.vision_train_worker.finished.connect(self.on_vision_train_finished)
+        self.vision_train_worker.error.connect(self.on_vision_train_error)
+        self.vision_train_worker.finished.connect(self.vision_train_thread.quit)
+        self.vision_train_worker.error.connect(self.vision_train_thread.quit)
+        self.vision_train_worker.finished.connect(self.vision_train_worker.deleteLater)
+        self.vision_train_worker.error.connect(self.vision_train_worker.deleteLater)
+        self.vision_train_thread.finished.connect(self._on_vision_train_thread_finished)
+        self.vision_train_thread.finished.connect(self.vision_train_thread.deleteLater)
+        self.vision_train_thread.start()
+        self._vision_last_summary = None
+        self._update_vision_train_status_label()
+
+    def on_vision_train_log(self, message):
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.append_log(message)
+
+    def on_vision_train_finished(self, summary):
+        self._vision_last_summary = dict(summary or {})
+        self._vision_last_summary_by_env[self.env_id_cb.currentText()] = dict(self._vision_last_summary)
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.set_running(False)
+        self._update_vision_train_status_label()
+        QMessageBox.information(
+            self,
+            "Vision Train",
+            f"Training finished.\nBest val loss: {self._vision_last_summary.get('best_val_loss', 0.0):.6f}\n"
+            f"ONNX: {self._vision_last_summary.get('onnx_path', '')}",
+        )
+
+    def on_vision_train_error(self, error_msg):
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.set_running(False)
+            self.vision_train_dialog.append_log(f"[vision-train] ERROR: {error_msg}\n")
+        self._update_vision_train_status_label()
+        QMessageBox.critical(self, "Vision Train", error_msg)
+
+    def _on_vision_train_thread_finished(self):
+        self.vision_train_thread = None
+        self.vision_train_worker = None
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.set_running(False)
+        self._update_vision_train_status_label()
+
+    def export_vision_predictor_onnx(self):
+        env_id = self.env_id_cb.currentText()
+        default_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "vision_heightmap", "latest")
+        default_path = os.path.join(default_dir, "vision_heightmap_predictor.onnx")
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Vision Predictor ONNX",
+            default_path,
+            "ONNX Files (*.onnx)"
+        )
+        if not output_path:
+            return
+        checkpoint_path = os.path.join(default_dir, "vision_heightmap_predictor.pt")
+        try:
+            from core.vision_heightmap_trainer import VisionHeightMapTrainer
+            trainer = VisionHeightMapTrainer(
+                repo_root=self._repo_root(),
+                env_id=env_id,
+                settings={},
+            )
+            exported = trainer.export_onnx_from_checkpoint(checkpoint_path, output_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Vision Train", str(e))
+            return
+        QMessageBox.information(self, "Vision Train", f"Predictor ONNX exported to:\n{exported}")
+
     def open_hardware_settings(self):
         env_id = self.env_id_cb.currentText()
         self._ensure_hardware_defaults()
@@ -1773,6 +2119,14 @@ class MainWindow(QMainWindow):
             self.initial_pose_settings_by_env[env_id] = {
                 "joints": dict((self.initial_pose_settings).get("joints", {}))
             }
+
+    def open_depth_randomization_settings(self):
+        env_id = self.env_id_cb.currentText()
+        self._ensure_depth_randomization_defaults()
+        dialog = DepthRandomizationSettingsDialog((self.depth_randomization_settings).copy(), self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.depth_randomization_settings = dialog.get_settings()
+            self.depth_randomization_settings_by_env[env_id] = dict(self.depth_randomization_settings)
 
     # ---------------- Run / Gather Config ----------------
 
@@ -1848,6 +2202,7 @@ class MainWindow(QMainWindow):
             self._ensure_initial_pose_defaults()
             self._ensure_monitor_defaults()
             self._ensure_fine_tune_defaults()
+            self._ensure_depth_randomization_defaults()
             # hardware: convert numeric strings to float where applicable
             hardware_numeric = {k: to_float(v, v) for k, v in self.hardware_settings.items()}
             actuator = (self.actuator_settings).copy()
@@ -1898,6 +2253,41 @@ class MainWindow(QMainWindow):
                 "depth_scale": str(depth_scale),
             }
             self.dataset_height_map_settings_by_env[self.env_id_cb.currentText()] = dict(self.dataset_height_map_settings)
+            depth_randomization_cfg = {
+                "enabled": bool(self.depth_randomization_settings.get("enabled", False)),
+                "camera_xyz_shift_m": to_float(self.depth_randomization_settings.get("camera_xyz_shift_m", 0.01), 0.01),
+                "camera_pitch_shift_deg": to_float(self.depth_randomization_settings.get("camera_pitch_shift_deg", 1.0), 1.0),
+                "camera_fov_shift_deg": to_float(self.depth_randomization_settings.get("camera_fov_shift_deg", 1.0), 1.0),
+                "gaussian_prob": to_float(self.depth_randomization_settings.get("gaussian_prob", 0.3), 0.3),
+                "gaussian_stddev": to_float(self.depth_randomization_settings.get("gaussian_stddev", 0.01), 0.01),
+                "rotation_prob": to_float(self.depth_randomization_settings.get("rotation_prob", 0.3), 0.3),
+                "rotation_deg": to_float(self.depth_randomization_settings.get("rotation_deg", 2.0), 2.0),
+                "edge_noise_prob": to_float(self.depth_randomization_settings.get("edge_noise_prob", 0.3), 0.3),
+                "edge_noise_ratio": to_float(self.depth_randomization_settings.get("edge_noise_ratio", 0.03), 0.03),
+                "small_object_prob": to_float(self.depth_randomization_settings.get("small_object_prob", 0.3), 0.3),
+                "small_object_ratio": to_float(self.depth_randomization_settings.get("small_object_ratio", 0.02), 0.02),
+                "small_object_count": to_int(self.depth_randomization_settings.get("small_object_count", 6), 6),
+                "spot_noise_prob": to_float(self.depth_randomization_settings.get("spot_noise_prob", 0.3), 0.3),
+                "spot_noise_ratio": to_float(self.depth_randomization_settings.get("spot_noise_ratio", 0.03), 0.03),
+            }
+            self.depth_randomization_settings = {
+                "enabled": depth_randomization_cfg["enabled"],
+                "camera_xyz_shift_m": str(depth_randomization_cfg["camera_xyz_shift_m"]),
+                "camera_pitch_shift_deg": str(depth_randomization_cfg["camera_pitch_shift_deg"]),
+                "camera_fov_shift_deg": str(depth_randomization_cfg["camera_fov_shift_deg"]),
+                "gaussian_prob": str(depth_randomization_cfg["gaussian_prob"]),
+                "gaussian_stddev": str(depth_randomization_cfg["gaussian_stddev"]),
+                "rotation_prob": str(depth_randomization_cfg["rotation_prob"]),
+                "rotation_deg": str(depth_randomization_cfg["rotation_deg"]),
+                "edge_noise_prob": str(depth_randomization_cfg["edge_noise_prob"]),
+                "edge_noise_ratio": str(depth_randomization_cfg["edge_noise_ratio"]),
+                "small_object_prob": str(depth_randomization_cfg["small_object_prob"]),
+                "small_object_ratio": str(depth_randomization_cfg["small_object_ratio"]),
+                "small_object_count": str(depth_randomization_cfg["small_object_count"]),
+                "spot_noise_prob": str(depth_randomization_cfg["spot_noise_prob"]),
+                "spot_noise_ratio": str(depth_randomization_cfg["spot_noise_ratio"]),
+            }
+            self.depth_randomization_settings_by_env[self.env_id_cb.currentText()] = dict(self.depth_randomization_settings)
 
             # settings: copy latest settings for the current env
             env_id = self.env_id_cb.currentText()
@@ -1979,6 +2369,7 @@ class MainWindow(QMainWindow):
                     "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()),
                     "dataset_enabled": bool(self.depth_dataset_save_cb.isChecked()),
                     "depth_scale": depth_scale,
+                    "depth_randomization": depth_randomization_cfg,
                     "height_map": dataset_height_map,
                 },
                 "fine_tune": {
@@ -2011,6 +2402,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         self.status_label.setText("Waiting ...")
         self._update_fine_tune_status_label()
+        self._update_vision_train_status_label()
 
     def reset_command_buttons(self):
         for key in list(self.active_keys.keys()):
@@ -2062,4 +2454,9 @@ class MainWindow(QMainWindow):
         self.depth_image_widget.clear_frame()
         self._restore_log_streams()
         self.mujoco_overlay.clear_overlay()
+        if self.vision_train_dialog is not None and self.vision_train_dialog.isVisible():
+            self.vision_train_dialog.close()
+        if self.vision_train_thread is not None and self.vision_train_thread.isRunning():
+            self.vision_train_thread.quit()
+            self.vision_train_thread.wait(1000)
         super().closeEvent(event)
