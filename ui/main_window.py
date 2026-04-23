@@ -364,12 +364,12 @@ class MainWindow(QMainWindow):
     def _make_vision_train_defaults(self, env_id: str):
         _ = env_id
         return {
-            "epochs": "10",
+            "epochs": "100",
             "batch_size": "64",
             "learning_rate": "1e-3",
             "latent_dim": "128",
             "hidden_dim": "128",
-            "val_ratio": "0.1",
+            "val_ratio": "0.15",
             "seed": "42",
             "selected_datasets": [],
         }
@@ -566,6 +566,8 @@ class MainWindow(QMainWindow):
             "y_right": str(y_right),
             "resolution": "0.1",
             "visualize": False,
+            "inference_visualize": False,
+            "inference_onnx_path": "",
             "frame_body": "camera_link",
             "depth_scale": "8",
         }
@@ -698,10 +700,13 @@ class MainWindow(QMainWindow):
         self.hm_y_right_le.setEnabled(has_depth)
         self.hm_resolution_le.setEnabled(has_depth)
         self.hm_visualize_cb.setEnabled(has_depth)
+        self.hm_inference_cb.setEnabled(has_depth)
+        self.hm_infer_btn.setEnabled(has_depth)
         if not has_depth:
             self.depth_window_toggle_cb.setChecked(False)
             self.depth_dataset_save_cb.setChecked(False)
             self.hm_visualize_cb.setChecked(False)
+            self.hm_inference_cb.setChecked(False)
             self.depth_status_label.setText("Unavailable")
             self.depth_image_widget.clear_frame()
         else:
@@ -963,6 +968,10 @@ class MainWindow(QMainWindow):
             self.hm_visualize_cb.blockSignals(True)
             self.hm_visualize_cb.setChecked(bool(self.dataset_height_map_settings.get("visualize", False)))
             self.hm_visualize_cb.blockSignals(False)
+            self.hm_inference_cb.blockSignals(True)
+            self.hm_inference_cb.setChecked(bool(self.dataset_height_map_settings.get("inference_visualize", False)))
+            self.hm_inference_cb.blockSignals(False)
+            self._sync_height_map_inference_button()
 
         self._refresh_monitor_joint_checkboxes()
         self._refresh_depth_controls(new_env_id)
@@ -971,6 +980,28 @@ class MainWindow(QMainWindow):
         self._sync_vision_train_controls_from_cache()
         if self.vision_train_dialog is not None and self.vision_train_dialog.isVisible():
             self._refresh_vision_train_dialog()
+
+    def _sync_height_map_inference_button(self):
+        path = str(self.dataset_height_map_settings.get("inference_onnx_path", "")).strip()
+        self.hm_infer_btn.setToolTip(path)
+
+    def select_height_map_inference_onnx(self):
+        env_id = self.env_id_cb.currentText()
+        current_path = str(self.dataset_height_map_settings.get("inference_onnx_path", "")).strip()
+        default_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "vision_heightmap", "latest")
+        start_dir = current_path if current_path else default_dir
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Height-Map Inference ONNX",
+            start_dir,
+            "ONNX Files (*.onnx)"
+        )
+        if not file_path:
+            return
+        self._ensure_dataset_height_map_defaults()
+        self.dataset_height_map_settings["inference_onnx_path"] = file_path
+        self.dataset_height_map_settings_by_env[env_id] = dict(self.dataset_height_map_settings)
+        self._sync_height_map_inference_button()
 
     def showEvent(self, event):
         self.centralWidget().setFocus()
@@ -1290,6 +1321,9 @@ class MainWindow(QMainWindow):
         self.hm_train_btn = QPushButton("Train")
         self.hm_train_btn.setFixedWidth(72)
         self.hm_train_btn.clicked.connect(self.open_vision_train_dialog)
+        self.hm_infer_btn = QPushButton("Inference")
+        self.hm_infer_btn.setFixedWidth(84)
+        self.hm_infer_btn.clicked.connect(self.select_height_map_inference_onnx)
         self.depth_status_label = QLabel("Unavailable")
         self.depth_status_label.setStyleSheet("color: #64748B;")
         depth_row_layout.addWidget(self.depth_window_toggle_cb)
@@ -1297,6 +1331,7 @@ class MainWindow(QMainWindow):
         depth_row_layout.addWidget(QLabel("Scale"))
         depth_row_layout.addWidget(self.depth_scale_le)
         depth_row_layout.addWidget(self.hm_train_btn)
+        depth_row_layout.addWidget(self.hm_infer_btn)
         depth_row_layout.addWidget(self.depth_status_label, 1)
         env_layout.addRow("Depth:", depth_row)
 
@@ -1315,6 +1350,7 @@ class MainWindow(QMainWindow):
         self.hm_resolution_le = QLineEdit("0.1")
         self.hm_resolution_le.setFixedWidth(48)
         self.hm_visualize_cb = QCheckBox("Viz")
+        self.hm_inference_cb = QCheckBox("Inference")
         self.vision_status_inline_label = QLabel("")
         self.vision_status_inline_label.setStyleSheet("color: #64748B;")
         hm_row_layout.addWidget(QLabel("X"))
@@ -1328,6 +1364,7 @@ class MainWindow(QMainWindow):
         hm_row_layout.addWidget(QLabel("Res"))
         hm_row_layout.addWidget(self.hm_resolution_le)
         hm_row_layout.addWidget(self.hm_visualize_cb)
+        hm_row_layout.addWidget(self.hm_inference_cb)
         hm_row_layout.addWidget(self.vision_status_inline_label, 1)
         env_layout.addRow("Height Map:", hm_row)
 
@@ -2219,6 +2256,10 @@ class MainWindow(QMainWindow):
             hm_y_right = to_float(self.hm_y_right_le.text(), 0.3)
             hm_resolution = to_float(self.hm_resolution_le.text(), 0.1)
             depth_scale = max(1, to_int(self.depth_scale_le.text(), 8))
+            inference_onnx_path = str(self.dataset_height_map_settings.get("inference_onnx_path", "")).strip()
+            inference_visualize = bool(self.hm_inference_cb.isChecked())
+            if inference_visualize and (not inference_onnx_path or not os.path.isfile(inference_onnx_path)):
+                raise RuntimeError("Select a valid height-map inference ONNX file before enabling inference visualization.")
             hm_size_x = hm_x_forward + hm_x_backward
             hm_size_y = hm_y_left + hm_y_right
             hm_res_x, hm_res_y = self._compute_height_map_grid(
@@ -2229,8 +2270,10 @@ class MainWindow(QMainWindow):
                 hm_resolution,
             )
             dataset_height_map = {
-                "enabled": bool(self.depth_dataset_save_cb.isChecked()) or bool(self.hm_visualize_cb.isChecked()),
+                "enabled": bool(self.depth_dataset_save_cb.isChecked()) or bool(self.hm_visualize_cb.isChecked()) or inference_visualize,
                 "visualize": bool(self.hm_visualize_cb.isChecked()),
+                "inference_visualize": inference_visualize,
+                "inference_onnx_path": inference_onnx_path,
                 "frame_body": "camera_link",
                 "x_forward": hm_x_forward,
                 "x_backward": hm_x_backward,
@@ -2249,6 +2292,8 @@ class MainWindow(QMainWindow):
                 "y_right": str(dataset_height_map["y_right"]),
                 "resolution": str(dataset_height_map["resolution"]),
                 "visualize": dataset_height_map["visualize"],
+                "inference_visualize": dataset_height_map["inference_visualize"],
+                "inference_onnx_path": dataset_height_map["inference_onnx_path"],
                 "frame_body": dataset_height_map["frame_body"],
                 "depth_scale": str(depth_scale),
             }
@@ -2366,7 +2411,7 @@ class MainWindow(QMainWindow):
                 "initial_positions": initial_positions,
                 "monitoring": {
                     "selected_joints": list(self.monitor_settings.get("selected_joints", [])),
-                    "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()),
+                    "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()) or inference_visualize,
                     "dataset_enabled": bool(self.depth_dataset_save_cb.isChecked()),
                     "depth_scale": depth_scale,
                     "depth_randomization": depth_randomization_cfg,

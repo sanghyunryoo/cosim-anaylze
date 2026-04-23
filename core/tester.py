@@ -7,6 +7,7 @@ import mujoco
 from core.policy import build_policy
 from core.depth_streamer import DepthStreamClient
 from core.heightmap_dataset_writer import HeightMapDatasetWriter
+from core.vision_heightmap_inference import VisionHeightMapInferencer
 from core.reporter import Reporter
 from envs.build import build_env
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -42,6 +43,11 @@ class Tester(QObject):
         self._dataset_writer = None
         self._dataset_warned = False
         self._height_map_cfg = {}
+        self._height_map_inference_enabled = False
+        self._height_map_inference_path = ""
+        self._height_map_inferencer = None
+        self._height_map_inference_warned = False
+        self._height_map_site_ids_by_prefix = {}
         self._depth_randomization_cfg = {}
         self._depth_camera_name = "depth_camera"
         self._depth_update_interval = 30
@@ -67,14 +73,19 @@ class Tester(QObject):
         self._height_map_cfg = monitoring_cfg.get("height_map", {}) if isinstance(monitoring_cfg.get("height_map", {}), dict) else {}
         self._depth_randomization_cfg = monitoring_cfg.get("depth_randomization", {}) if isinstance(monitoring_cfg.get("depth_randomization", {}), dict) else {}
         self._height_map_enabled = bool(self._height_map_cfg.get("enabled", False))
-        self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False)) or self._dataset_enabled
+        self._height_map_inference_enabled = bool(self._height_map_cfg.get("inference_visualize", False))
+        self._height_map_inference_path = str(self._height_map_cfg.get("inference_onnx_path", "")).strip()
+        self._height_map_inferencer = None
+        self._height_map_inference_warned = False
+        self._height_map_site_ids_by_prefix = {}
+        self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False)) or self._dataset_enabled or self._height_map_inference_enabled
         self._depth_scale = max(1, int(monitoring_cfg.get("depth_scale", 8) or 8))
         base_w, base_h = self._depth_base_frame_size
         self._depth_frame_size = (
             max(1, int(base_w // self._depth_scale)),
             max(1, int(base_h // self._depth_scale)),
         )
-        self._depth_update_interval = 1 if self._dataset_enabled else 30
+        self._depth_update_interval = 1 if (self._dataset_enabled or self._height_map_inference_enabled) else 30
         self._depth_gui_emit_interval = 30
 
     def load_policy(self, policy_path):
@@ -191,6 +202,7 @@ class Tester(QObject):
         self.env = build_env(self.config)
         self._init_depth_stream()
         self._init_height_map_visualization()
+        self._init_height_map_inference()
         self._init_dataset_writer()
         self._monitor_history = {joint_name: deque(maxlen=self._monitor_history_len) for joint_name in self._monitor_joint_names}
         self._monitor_session_history = {joint_name: [] for joint_name in self._monitor_joint_names}
@@ -536,7 +548,31 @@ class Tester(QObject):
         res_y = int(self._height_map_cfg.get("res_y", 0) or 0)
         if res_x <= 0 or res_y <= 0:
             return
-        mujoco_utils.init_heightmap_visualization(res_x, res_y, prefix="dataset_heightmap_site")
+        if bool(self._height_map_cfg.get("visualize", False)):
+            mujoco_utils.init_heightmap_visualization(res_x, res_y, prefix="dataset_heightmap_site")
+
+    def _init_height_map_inference(self):
+        self._height_map_inferencer = None
+        if not self._height_map_inference_enabled:
+            return
+        if not self._height_map_inference_path:
+            raise RuntimeError("Height-map inference visualization is enabled, but no ONNX file was selected.")
+
+        self._height_map_inferencer = VisionHeightMapInferencer(self._height_map_inference_path)
+        output_shape = list(getattr(self._height_map_inferencer.output, "shape", []) or [])
+        out_h = int(output_shape[-2]) if len(output_shape) >= 2 and str(output_shape[-2]).isdigit() else 0
+        out_w = int(output_shape[-1]) if len(output_shape) >= 1 and str(output_shape[-1]).isdigit() else 0
+        cfg_h = int(self._height_map_cfg.get("res_y", 0) or 0)
+        cfg_w = int(self._height_map_cfg.get("res_x", 0) or 0)
+        if out_h > 0 and out_w > 0 and (out_h != cfg_h or out_w != cfg_w):
+            raise RuntimeError(
+                f"Height-map inference ONNX output shape {(out_h, out_w)} does not match GUI grid {(cfg_h, cfg_w)}."
+            )
+        self._height_map_site_ids_by_prefix["inference_heightmap_site"] = self._resolve_height_map_site_ids(
+            "inference_heightmap_site",
+            cfg_w,
+            cfg_h,
+        )
 
     def _compute_projected_gravity(self, leaf_env):
         model = getattr(leaf_env, "model", None)
@@ -583,6 +619,105 @@ class Tester(QObject):
             axis_body_name=self._get_height_map_axis_body_name(leaf_env),
         ).astype(np.float32)
 
+    def _resolve_height_map_site_ids(self, prefix: str, res_x: int, res_y: int):
+        model = getattr(self._get_leaf_env(), "model", None)
+        if model is None:
+            raise RuntimeError("MuJoCo model is not ready for height-map visualization.")
+        site_ids = [[None for _ in range(res_x)] for _ in range(res_y)]
+        for i in range(res_y):
+            for j in range(res_x):
+                site_name = f"{prefix}_{i}_{j}"
+                sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+                if sid == -1:
+                    raise RuntimeError(
+                        f"Site '{site_name}' not found in model. Rebuild the env XML with inference height-map sites."
+                    )
+                site_ids[i][j] = sid
+        return site_ids
+
+    def _get_height_map_frame_axes(self, leaf_env):
+        model = getattr(leaf_env, "model", None)
+        data = getattr(leaf_env, "data", None)
+        if model is None or data is None:
+            return None
+
+        frame_body_name = str(self._height_map_cfg.get("frame_body", "camera_link"))
+        frame_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, frame_body_name)
+        if frame_body_id == -1:
+            raise RuntimeError(f"Body '{frame_body_name}' not found in model.")
+
+        frame_pos = np.asarray(data.xpos[frame_body_id], dtype=np.float64)
+        axis_body_name = self._get_height_map_axis_body_name(leaf_env)
+        axis_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, axis_body_name)
+        if axis_body_id == -1:
+            axis_body_id = frame_body_id
+        rot = np.asarray(data.xmat[axis_body_id], dtype=np.float64).reshape(3, 3)
+        world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+        forward_axis = rot[:, 0].copy()
+        forward_axis[2] = 0.0
+        forward_norm = np.linalg.norm(forward_axis)
+        if forward_norm < 1e-8:
+            forward_axis = rot[:, 1].copy()
+            forward_axis[2] = 0.0
+            forward_norm = np.linalg.norm(forward_axis)
+        if forward_norm < 1e-8:
+            forward_axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        else:
+            forward_axis /= forward_norm
+
+        lateral_axis = np.cross(world_up, forward_axis)
+        lateral_norm = np.linalg.norm(lateral_axis)
+        if lateral_norm < 1e-8:
+            lateral_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        else:
+            lateral_axis /= lateral_norm
+        return frame_pos, forward_axis, lateral_axis
+
+    def _render_height_map_values(self, leaf_env, height_map, prefix: str, rgba):
+        if height_map is None:
+            return
+
+        res_x = int(self._height_map_cfg.get("res_x", 0) or 0)
+        res_y = int(self._height_map_cfg.get("res_y", 0) or 0)
+        if res_x <= 0 or res_y <= 0:
+            return
+
+        height_map = np.asarray(height_map, dtype=np.float32).reshape(res_y, res_x)
+        frame_info = self._get_height_map_frame_axes(leaf_env)
+        if frame_info is None:
+            return
+        frame_pos, forward_axis, lateral_axis = frame_info
+        x_forward = float(self._height_map_cfg.get("x_forward", float(self._height_map_cfg.get("size_x", 1.0)) / 2.0))
+        x_backward = float(self._height_map_cfg.get("x_backward", float(self._height_map_cfg.get("size_x", 1.0)) / 2.0))
+        y_left = float(self._height_map_cfg.get("y_left", float(self._height_map_cfg.get("size_y", 0.6)) / 2.0))
+        y_right = float(self._height_map_cfg.get("y_right", float(self._height_map_cfg.get("size_y", 0.6)) / 2.0))
+        x_coords = np.linspace(-x_backward, x_forward, res_x, dtype=np.float64)
+        y_coords = np.linspace(-y_right, y_left, res_y, dtype=np.float64)
+
+        model = getattr(leaf_env, "model", None)
+        data = getattr(leaf_env, "data", None)
+        if model is None or data is None:
+            return
+        site_ids = self._height_map_site_ids_by_prefix.get(prefix)
+        if site_ids is None:
+            site_ids = self._resolve_height_map_site_ids(prefix, res_x, res_y)
+            self._height_map_site_ids_by_prefix[prefix] = site_ids
+
+        for i in range(res_y):
+            for j in range(res_x):
+                world_xy = frame_pos + (forward_axis * x_coords[j]) + (lateral_axis * y_coords[i])
+                terrain_height = float(frame_pos[2] - height_map[i, j])
+                sid = site_ids[i][j]
+                data.site_xpos[sid][0] = world_xy[0]
+                data.site_xpos[sid][1] = world_xy[1]
+                data.site_xpos[sid][2] = terrain_height
+                model.site_size[sid][0] = 0.012
+                model.site_rgba[sid][0] = float(rgba[0])
+                model.site_rgba[sid][1] = float(rgba[1])
+                model.site_rgba[sid][2] = float(rgba[2])
+                model.site_rgba[sid][3] = float(rgba[3])
+
     def _maybe_record_dataset(self, payload):
         if self._dataset_writer is None or not payload or payload.get("image") is None:
             return
@@ -618,6 +753,34 @@ class Tester(QObject):
                 print(f"[WARN] Height map visualization skipped: {exc}")
                 self._dataset_warned = True
 
+    def _update_inference_height_map_visualization(self, payload):
+        if not self._height_map_inference_enabled or self._height_map_inferencer is None:
+            return
+        if not payload or payload.get("image") is None:
+            return
+
+        leaf_env = self._get_leaf_env()
+        if leaf_env is None:
+            return
+
+        try:
+            projected_gravity = self._compute_projected_gravity(leaf_env)
+            if projected_gravity is None:
+                return
+            predicted_height_map = self._height_map_inferencer.predict(payload["image"], projected_gravity)
+            if predicted_height_map is None:
+                return
+            self._render_height_map_values(
+                leaf_env,
+                predicted_height_map,
+                prefix="inference_heightmap_site",
+                rgba=(0.15, 0.7, 1.0, 0.8),
+            )
+        except Exception as exc:
+            if not self._height_map_inference_warned:
+                print(f"[WARN] Height-map inference skipped: {exc}")
+                self._height_map_inference_warned = True
+
     def _emit_depth_payload(self, force=False):
         if self._depth_stream is None:
             if force:
@@ -644,12 +807,14 @@ class Tester(QObject):
                 if payloads:
                     for payload in payloads:
                         self._maybe_record_dataset(payload)
+                        self._update_inference_height_map_visualization(payload)
                     if force or (local_step % max(1, self._depth_gui_emit_interval)) == 0:
                         self.depthUpdated.emit(payloads[-1])
             else:
                 payload = self._depth_stream.poll()
                 if payload is not None:
                     self._maybe_record_dataset(payload)
+                    self._update_inference_height_map_visualization(payload)
                     self.depthUpdated.emit(payload)
         except Exception as exc:
             print(f"[WARN] Depth stream skipped: {exc}")

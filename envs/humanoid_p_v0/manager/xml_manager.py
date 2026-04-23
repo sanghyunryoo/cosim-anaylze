@@ -123,7 +123,36 @@ class XMLManager:
                     })
                     base_link.append(site_element)
 
+        monitoring_cfg = self.config.get("monitoring", {}) or {}
+        hm_cfg = monitoring_cfg.get("height_map", {}) if isinstance(monitoring_cfg.get("height_map", {}), dict) else {}
+        if bool(hm_cfg.get("inference_visualize", False)):
+            res_x = int(hm_cfg.get("res_x", 0) or 0)
+            res_y = int(hm_cfg.get("res_y", 0) or 0)
+            frame_body_name = str(hm_cfg.get("frame_body", "camera_link"))
+
+            worldbody = root.find('worldbody')
+            target_body = None
+            for body in worldbody.iter('body'):
+                if body.get('name') == frame_body_name:
+                    target_body = body
+                    break
+
+            if target_body is None:
+                raise ValueError(f"Could not find <body name='{frame_body_name}'> in the XML file.")
+
+            for i in range(res_y):
+                for j in range(res_x):
+                    site_name = f"inference_heightmap_site_{i}_{j}"
+                    site_element = ET.Element('site', {
+                        'name': site_name,
+                        'type': 'sphere',
+                        'size': '0.00000001',
+                        'pos': '0 0 -1',
+                        'rgba': '0.15 0.7 1 0.0000001',
+                        'group': '0',
+                    })
+                    target_body.append(site_element)
+
         randomized_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'applied_humanoid_p_v0.xml')
         tree.write(randomized_model_path)
         return randomized_model_path
-
