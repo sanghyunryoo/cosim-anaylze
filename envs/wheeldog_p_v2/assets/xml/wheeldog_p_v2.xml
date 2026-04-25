@@ -148,7 +148,7 @@
             </body>
         </body>
         </body>
-        <body name="camera_link"
+        <body name="F_camera_link"
               pos="0.211858343080146 0.000632972309653035 -0.0842872752858781"
               quat="0.27123040676455135 -0.6517512623783331 0.6548081265390032 -0.2699642121709208">
             <inertial
@@ -156,9 +156,22 @@
                 mass="0.1"
                 fullinertia="0.000114545143970138 0.000771596132968229 0.000763742678007925
                              3.03595147302054E-06 -1.13423804692718E-05 -1.5193621964E-07"/>
-            <geom name="camera_link_collision" pos="0 0 0" type="mesh" mesh="camera_link" class="collision"/>
-            <geom name="camera_link_visual"    pos="0 0 0" type="mesh" mesh="camera_link" class="visual"/>
+            <geom name="F_camera_link_collision" pos="0 0 0" type="mesh" mesh="F_camera_link" class="collision"/>
+            <geom name="F_camera_link_visual"    pos="0 0 0" type="mesh" mesh="F_camera_link" class="visual"/>
             <camera name="depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="58"/>
+        </body>
+        <body name="R_camera_link"
+              pos="-0.211858343080146 -0.000632972282273325 -0.0842872752858803"
+              quat="0.2705980500730996 -0.6532814824381864 -0.6532814824381888 0.2705980500731006">
+            <inertial
+                pos="-0.000479342334581523 2.78732645673241E-05 -0.0125657265319665"
+                mass="0.1"
+                fullinertia="0.000114531122776459 0.00077161028274995 0.00076374278360026
+                             -3.86347265010208E-08 -1.13415603182861E-05 -2.05003343271951E-07"/>
+            <geom name="R_camera_link_collision" pos="0 0 0" type="mesh" mesh="R_camera_link" class="collision"/>
+            <geom name="R_camera_link_visual"    pos="0 0 0" type="mesh" mesh="R_camera_link" class="visual"/>
+
+            <camera name="rear_depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="58"/>
         </body>
         </body>
     </worldbody>
@@ -186,7 +199,8 @@
         <mesh name="RR_shoulder_link" file="../mesh/RR_shoulder_link.STL"/>
         <mesh name="RR_leg_link"      file="../mesh/RR_leg_link.STL"/>
         <mesh name="RR_wheel_link"    file="../mesh/RR_wheel_link.STL"/>
-        <mesh name="camera_link" file="../mesh/camera_link.STL"/>
+        <mesh name="F_camera_link" file="../mesh/F_camera_link.STL"/>
+        <mesh name="R_camera_link" file="../mesh/R_camera_link.STL"/>
 
         <hfield name="rocky_easy" file="../terrain/rocky_easy.png" nrow="512" ncol="512" size="140 140 0.1 0.1"/>
         <hfield name="rocky_hard" file="../terrain/rocky_hard.png" nrow="512" ncol="512" size="140 140 0.25 0.1"/>

@@ -117,12 +117,24 @@ class XMLManager:
                     })
                     base_link.append(site_element)
 
+        def resolve_frame_body_name(requested_name):
+            body_names = {body.get('name') for body in root.findall('.//body')}
+            if "base_link" in body_names:
+                return "base_link"
+            if requested_name in body_names:
+                return requested_name
+            for candidate in ("base_link", "F_camera_link"):
+                if candidate in body_names:
+                    return candidate
+            return requested_name
+
         monitoring_cfg = self.config.get("monitoring", {}) or {}
         hm_cfg = monitoring_cfg.get("height_map", {}) if isinstance(monitoring_cfg.get("height_map", {}), dict) else {}
         if bool(hm_cfg.get("enabled", False)):
             res_x = int(hm_cfg.get("res_x", 0) or 0)
             res_y = int(hm_cfg.get("res_y", 0) or 0)
-            frame_body_name = str(hm_cfg.get("frame_body", "camera_link"))
+            frame_body_name = resolve_frame_body_name(str(hm_cfg.get("frame_body", "camera_link")))
+            hm_cfg["frame_body"] = frame_body_name
 
             worldbody = root.find('worldbody')
             target_body = None
@@ -150,7 +162,8 @@ class XMLManager:
         if bool(hm_cfg.get("inference_visualize", False)):
             res_x = int(hm_cfg.get("res_x", 0) or 0)
             res_y = int(hm_cfg.get("res_y", 0) or 0)
-            frame_body_name = str(hm_cfg.get("frame_body", "camera_link"))
+            frame_body_name = resolve_frame_body_name(str(hm_cfg.get("frame_body", "camera_link")))
+            hm_cfg["frame_body"] = frame_body_name
 
             worldbody = root.find('worldbody')
             target_body = None

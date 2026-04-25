@@ -549,6 +549,10 @@ class MainWindow(QMainWindow):
             "selected_joints": list(default_selected),
         }
 
+    def _default_height_map_frame_body(self, env_id: str):
+        _ = env_id
+        return "base_link"
+
     def _make_dataset_height_map_defaults(self, env_id: str):
         env_cfg = self.env_config.get(env_id, {}) or {}
         settings_cfg = env_cfg.get("settings", env_cfg) if isinstance(env_cfg, dict) else {}
@@ -568,7 +572,7 @@ class MainWindow(QMainWindow):
             "visualize": False,
             "inference_visualize": False,
             "inference_onnx_path": "",
-            "frame_body": "camera_link",
+            "frame_body": self._default_height_map_frame_body(env_id),
             "depth_scale": "8",
         }
 
@@ -2274,7 +2278,7 @@ class MainWindow(QMainWindow):
                 "visualize": bool(self.hm_visualize_cb.isChecked()),
                 "inference_visualize": inference_visualize,
                 "inference_onnx_path": inference_onnx_path,
-                "frame_body": "camera_link",
+                "frame_body": self._default_height_map_frame_body(self.env_id_cb.currentText()),
                 "x_forward": hm_x_forward,
                 "x_backward": hm_x_backward,
                 "y_left": hm_y_left,

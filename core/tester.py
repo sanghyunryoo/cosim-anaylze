@@ -50,10 +50,13 @@ class Tester(QObject):
         self._height_map_site_ids_by_prefix = {}
         self._depth_randomization_cfg = {}
         self._depth_camera_name = "depth_camera"
+        self._depth_camera_names = [self._depth_camera_name]
         self._depth_update_interval = 30
         self._depth_gui_emit_interval = 30
         self._depth_base_frame_size = (640, 480)
         self._depth_frame_size = (80, 60)
+        self._depth_streams = {}
+        self._latest_depth_payloads = {}
         self._depth_scale = 8
         self._depth_processing = {
             "max_range_m": 2.5,
@@ -259,9 +262,14 @@ class Tester(QObject):
 
     def close(self):
         try:
-            if self._depth_stream is not None:
-                self._depth_stream.close()
-                self._depth_stream = None
+            for depth_stream in list(getattr(self, "_depth_streams", {}).values()):
+                try:
+                    depth_stream.close()
+                except Exception:
+                    pass
+            self._depth_streams = {}
+            self._latest_depth_payloads = {}
+            self._depth_stream = None
         except Exception:
             pass
         try:
@@ -484,6 +492,8 @@ class Tester(QObject):
 
     def _init_depth_stream(self):
         self._depth_stream = None
+        self._depth_streams = {}
+        self._latest_depth_payloads = {}
         if not self._depth_enabled:
             return
 
@@ -497,19 +507,35 @@ class Tester(QObject):
         if not model_path:
             return
 
-        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, self._depth_camera_name)
-        if camera_id == -1:
+        self._depth_camera_names = self._resolve_depth_camera_names(model)
+        if not self._depth_camera_names:
             return
 
-        self._depth_stream = DepthStreamClient(
-            model_path=model_path,
-            camera_name=self._depth_camera_name,
-            frame_size=self._depth_frame_size,
-            processing=self._depth_processing,
-            randomization=self._depth_randomization_cfg,
-            preserve_all_frames=self._dataset_enabled,
-            queue_size=2048 if self._dataset_enabled else 2,
-        )
+        for camera_name in self._depth_camera_names:
+            preserve_all_frames = self._dataset_enabled and camera_name == self._depth_camera_name
+            self._depth_streams[camera_name] = DepthStreamClient(
+                model_path=model_path,
+                camera_name=camera_name,
+                frame_size=self._depth_frame_size,
+                processing=self._depth_processing,
+                randomization=self._depth_randomization_cfg,
+                preserve_all_frames=preserve_all_frames,
+                queue_size=2048 if preserve_all_frames else 2,
+            )
+        self._depth_stream = self._depth_streams.get(self._depth_camera_name)
+
+    def _resolve_depth_camera_names(self, model):
+        names = []
+        for camera_id in range(int(getattr(model, "ncam", 0))):
+            camera_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_id)
+            if not camera_name:
+                continue
+            if camera_name == self._depth_camera_name or camera_name.endswith("_depth_camera"):
+                names.append(camera_name)
+        if self._depth_camera_name in names:
+            names.remove(self._depth_camera_name)
+            names.insert(0, self._depth_camera_name)
+        return names
 
     def _init_dataset_writer(self):
         self._dataset_writer = None
@@ -587,6 +613,21 @@ class Tester(QObject):
                 return (rot.T @ np.array([0.0, 0.0, -1.0], dtype=np.float64)).astype(np.float32)
         return None
 
+    def _resolve_height_map_frame_body_name(self, leaf_env):
+        requested = str(self._height_map_cfg.get("frame_body", "camera_link"))
+        model = getattr(leaf_env, "model", None)
+        if model is None:
+            return requested
+        for candidate in ("base_link", "pelvis_link"):
+            if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, candidate) != -1:
+                return candidate
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, requested) != -1:
+            return requested
+        for candidate in ("F_camera_link",):
+            if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, candidate) != -1:
+                return candidate
+        return requested
+
     def _get_height_map_axis_body_name(self, leaf_env):
         model = getattr(leaf_env, "model", None)
         if model is None:
@@ -595,7 +636,7 @@ class Tester(QObject):
             body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
             if body_id != -1:
                 return body_name
-        return str(self._height_map_cfg.get("frame_body", "camera_link"))
+        return self._resolve_height_map_frame_body_name(leaf_env)
 
     def _compute_height_map_target(self, leaf_env):
         res_x = int(self._height_map_cfg.get("res_x", 0) or 0)
@@ -614,7 +655,7 @@ class Tester(QObject):
             float(self._height_map_cfg.get("y_right", float(self._height_map_cfg.get("size_y", 0.6)) / 2.0)),
             res_x,
             res_y,
-            frame_body_name=str(self._height_map_cfg.get("frame_body", "camera_link")),
+            frame_body_name=self._resolve_height_map_frame_body_name(leaf_env),
             site_prefix="dataset_heightmap_site",
             axis_body_name=self._get_height_map_axis_body_name(leaf_env),
         ).astype(np.float32)
@@ -641,7 +682,7 @@ class Tester(QObject):
         if model is None or data is None:
             return None
 
-        frame_body_name = str(self._height_map_cfg.get("frame_body", "camera_link"))
+        frame_body_name = self._resolve_height_map_frame_body_name(leaf_env)
         frame_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, frame_body_name)
         if frame_body_id == -1:
             raise RuntimeError(f"Body '{frame_body_name}' not found in model.")
@@ -782,7 +823,7 @@ class Tester(QObject):
                 self._height_map_inference_warned = True
 
     def _emit_depth_payload(self, force=False):
-        if self._depth_stream is None:
+        if not self._depth_streams:
             if force:
                 self.depthUpdated.emit({})
             return
@@ -795,30 +836,60 @@ class Tester(QObject):
 
         local_step = int(getattr(leaf_env, "local_step", 0))
         if force or (local_step % max(1, self._depth_update_interval)) == 0:
-            self._depth_stream.submit(
-                env_id=(self.config.get("env", {}) or {}).get("id", ""),
-                qpos=np.asarray(leaf_env.data.qpos, dtype=np.float64),
-                qvel=np.asarray(leaf_env.data.qvel, dtype=np.float64),
-            )
+            env_id = (self.config.get("env", {}) or {}).get("id", "")
+            qpos = np.asarray(leaf_env.data.qpos, dtype=np.float64)
+            qvel = np.asarray(leaf_env.data.qvel, dtype=np.float64)
+            for depth_stream in self._depth_streams.values():
+                depth_stream.submit(env_id=env_id, qpos=qpos, qvel=qvel)
 
         try:
             if self._dataset_enabled:
-                payloads = self._depth_stream.poll_all()
-                if payloads:
-                    for payload in payloads:
+                primary_stream = self._depth_streams.get(self._depth_camera_name)
+                primary_payloads = primary_stream.poll_all() if primary_stream is not None else []
+                for camera_name, depth_stream in self._depth_streams.items():
+                    if camera_name == self._depth_camera_name:
+                        continue
+                    payload = depth_stream.poll()
+                    if payload is not None:
+                        self._latest_depth_payloads[camera_name] = payload
+                if primary_payloads:
+                    for payload in primary_payloads:
+                        self._latest_depth_payloads[self._depth_camera_name] = payload
                         self._maybe_record_dataset(payload)
                         self._update_inference_height_map_visualization(payload)
                     if force or (local_step % max(1, self._depth_gui_emit_interval)) == 0:
-                        self.depthUpdated.emit(payloads[-1])
+                        self.depthUpdated.emit(self._make_depth_gui_payload())
             else:
-                payload = self._depth_stream.poll()
-                if payload is not None:
-                    self._maybe_record_dataset(payload)
-                    self._update_inference_height_map_visualization(payload)
-                    self.depthUpdated.emit(payload)
+                updated = False
+                for camera_name, depth_stream in self._depth_streams.items():
+                    payload = depth_stream.poll()
+                    if payload is None:
+                        continue
+                    self._latest_depth_payloads[camera_name] = payload
+                    updated = True
+                    if camera_name == self._depth_camera_name:
+                        self._maybe_record_dataset(payload)
+                        self._update_inference_height_map_visualization(payload)
+                if updated:
+                    self.depthUpdated.emit(self._make_depth_gui_payload())
         except Exception as exc:
             print(f"[WARN] Depth stream skipped: {exc}")
             self.depthUpdated.emit({})
+
+    def _make_depth_gui_payload(self):
+        payloads = [
+            self._latest_depth_payloads[camera_name]
+            for camera_name in self._depth_camera_names
+            if camera_name in self._latest_depth_payloads
+        ]
+        if not payloads:
+            return {}
+        if len(payloads) == 1:
+            return payloads[0]
+        first = dict(payloads[0])
+        first["frames"] = payloads
+        first["camera_name"] = ", ".join(str(payload.get("camera_name", "")) for payload in payloads)
+        return first
 
     def get_monitor_export_payload(self):
         env_id = (self.config.get("env", {}) or {}).get("id", "")

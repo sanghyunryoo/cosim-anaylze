@@ -354,19 +354,16 @@ class DepthImageWidget(QWidget):
         self.image_label.setPixmap(QPixmap())
         self.hide()
 
-    def update_depth(self, payload: dict):
+    def _depth_payload_to_pixmap(self, payload: dict):
         if not payload or payload.get("image") is None:
-            self.clear_frame()
-            return
-
+            return None
         raw_image = np.asarray(payload.get("image"))
         if raw_image.dtype == np.uint8:
             depth_u8 = raw_image
         else:
             image = raw_image.astype(np.float32)
             if image.ndim != 2 or image.size == 0:
-                self.clear_frame()
-                return
+                return None
 
             valid = np.isfinite(image)
             if not np.any(valid):
@@ -381,17 +378,52 @@ class DepthImageWidget(QWidget):
                 depth_u8 = ((1.0 - normalized) * 255.0).astype(np.uint8)
 
         if depth_u8.ndim != 2 or depth_u8.size == 0:
-            self.clear_frame()
-            return
+            return None
 
         height, width = depth_u8.shape
         qimage = QImage(depth_u8.data, width, height, width, QImage.Format_Grayscale8).copy()
-        self._pixmap = QPixmap.fromImage(qimage)
+        return QPixmap.fromImage(qimage), width, height
+
+    def update_depth(self, payload: dict):
+        if not payload:
+            self.clear_frame()
+            return
+
+        frames = payload.get("frames") if isinstance(payload.get("frames"), list) else [payload]
+        pixmaps = []
+        for frame_payload in frames:
+            converted = self._depth_payload_to_pixmap(frame_payload if isinstance(frame_payload, dict) else {})
+            if converted is None:
+                continue
+            pixmap, width, height = converted
+            pixmaps.append((frame_payload, pixmap, width, height))
+
+        if not pixmaps:
+            self.clear_frame()
+            return
+
+        max_height = max(height for _, _, _, height in pixmaps)
+        total_width = sum(width for _, _, width, _ in pixmaps)
+        separator_width = 4 * max(0, len(pixmaps) - 1)
+        composite = QPixmap(total_width + separator_width, max_height)
+        composite.fill(QColor("#000000"))
+        painter = QPainter(composite)
+        x = 0
+        for index, (_, pixmap, width, height) in enumerate(pixmaps):
+            painter.drawPixmap(x, 0, pixmap)
+            x += width
+            if index < len(pixmaps) - 1:
+                painter.fillRect(x, 0, 4, max_height, QColor("#334155"))
+                x += 4
+        painter.end()
+
+        self._pixmap = composite
         env_id = str(payload.get("env_id", "robot"))
-        resolution = str(payload.get("resolution", f"{width}x{height}"))
+        resolution = str(payload.get("resolution", f"{pixmaps[0][2]}x{pixmaps[0][3]}"))
         max_range_m = float(payload.get("max_range_m", 2.5))
         self.setWindowTitle(f"Depth Image | {env_id}")
-        self.info_label.setText(f"{env_id} | depth_camera | {resolution} | max {max_range_m:.1f}m")
+        camera_names = [str(frame_payload.get("camera_name", "depth_camera")) for frame_payload, _, _, _ in pixmaps]
+        self.info_label.setText(f"{env_id} | {' + '.join(camera_names)} | {resolution} | max {max_range_m:.1f}m")
         self._refresh_pixmap()
         self.show()
         self.raise_()
