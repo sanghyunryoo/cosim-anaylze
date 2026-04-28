@@ -159,7 +159,7 @@
             <geom name="F_camera_link_collision" pos="0 0 0" type="mesh" mesh="F_camera_link" class="collision"/>
             <geom name="F_camera_link_visual"    pos="0 0 0" type="mesh" mesh="F_camera_link" class="visual"/>
             <camera name="depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="58"/>
-        </body>
+        </body> 
         <body name="R_camera_link"
               pos="-0.211858343080146 -0.000632972282273325 -0.0842872752858803"
               quat="0.2705980500730996 -0.6532814824381864 -0.6532814824381888 0.2705980500731006">
@@ -182,7 +182,7 @@
         <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
         <material name="rubber" rgba="0.4 0.4 0.4 1" shininess="0.5" reflectance="0.2"/>
 
-        <mesh name="base_link" file="../mesh/base_link_cam.STL"/>
+        <mesh name="base_link" file="../mesh/base_link_cam_2.STL"/>
         <mesh name="FL_hip_link"      file="../mesh/FL_hip_link.STL"/>
         <mesh name="FL_shoulder_link" file="../mesh/FL_shoulder_link.STL"/>
         <mesh name="FL_leg_link"      file="../mesh/FL_leg_link.STL"/>

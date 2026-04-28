@@ -6,7 +6,7 @@
   "non_stacked_obs_order": []
   "obs_scales":
     "dof_pos": 1.0
-    "dof_vel": 0.05
+    "dof_vel": 0.15
     "ang_vel": 0.25
   "command":
     "command_dim": 3
@@ -23,7 +23,7 @@
     "size_y": 0.6
     "res_x": 15
     "res_y": 9
-  "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
+  "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0]
   "hardware":
     "action_dim": 16
     "Kp_hip": 100
