@@ -1,6 +1,7 @@
 import json
 import copy
 import os
+import shutil
 import time
 from dataclasses import dataclass
 
@@ -143,6 +144,7 @@ class MoEArtifacts:
     run_dir: str
     checkpoint_path: str
     gate_onnx_path: str
+    alpha_onnx_path: str
     manifest_path: str
     summary_path: str
 
@@ -294,6 +296,7 @@ class MoETrainer:
             run_dir=run_dir,
             checkpoint_path=os.path.join(run_dir, "moe_gate.pt"),
             gate_onnx_path=os.path.join(run_dir, "moe_gate.onnx"),
+            alpha_onnx_path=os.path.join(run_dir, "moe_alpha.onnx"),
             manifest_path=os.path.join(run_dir, "moe_policy_manifest.json"),
             summary_path=os.path.join(run_dir, "train_summary.json"),
         )
@@ -491,7 +494,7 @@ class MoETrainer:
         roughness = float(np.std(hm))
         height_range = float(np.max(hm) - np.min(hm))
         stairs_flag = 1.0 if "stairs" in str(terrain) else 0.0
-        score = 10.0 * roughness + 6.0 * height_range + 2.0 * stairs_flag - 0.7
+        score = 10.0 * roughness + 6.0 * height_range + 2.0 * stairs_flag - 3.0
         return float(self._sigmoid(score))
 
     def _sample_command(self, rng, command_dim):
@@ -739,6 +742,7 @@ class MoETrainer:
             "best_val_loss": float(best_val),
             "checkpoint_path": artifacts.checkpoint_path,
             "gate_onnx_path": artifacts.gate_onnx_path,
+            "alpha_onnx_path": artifacts.alpha_onnx_path,
             "moe_onnx_path": os.path.join(artifacts.run_dir, "moe_policy.onnx"),
             "manifest_path": artifacts.manifest_path,
             "history": history,
@@ -773,6 +777,8 @@ class MoETrainer:
             output_names=["alpha"],
             opset_version=17,
         )
+        if os.path.abspath(gate_onnx_path) != os.path.abspath(artifacts.alpha_onnx_path):
+            shutil.copyfile(gate_onnx_path, artifacts.alpha_onnx_path)
         policy_a_path = checkpoint.get("policy_a_path", self.settings.get("policy_a_path", ""))
         policy_b_path = checkpoint.get("policy_b_path", self.settings.get("policy_b_path", ""))
         fused_path = self.export_fused_moe_onnx(policy_a_path, policy_b_path, gate_onnx_path, output_path)
@@ -781,6 +787,7 @@ class MoETrainer:
             "policy_a_path": policy_a_path,
             "policy_b_path": policy_b_path,
             "gate_onnx_path": gate_onnx_path,
+            "alpha_onnx_path": artifacts.alpha_onnx_path,
             "moe_onnx_path": fused_path,
             "formula": "action = (1 - alpha) * policy_A(obs) + alpha * policy_B(obs)",
             "onnx_inputs": ["obs"],
@@ -789,5 +796,6 @@ class MoETrainer:
         with open(artifacts.manifest_path, "w", encoding="utf-8") as handle:
             json.dump(manifest, handle, indent=2)
         self._log(f"[moe-export] gate ONNX exported: {gate_onnx_path}")
+        self._log(f"[moe-export] alpha ONNX exported: {artifacts.alpha_onnx_path}")
         self._log(f"[moe-export] manifest written: {artifacts.manifest_path}")
         return fused_path

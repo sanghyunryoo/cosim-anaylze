@@ -322,6 +322,116 @@ class MujocoOverlayWidget(QWidget):
         super().closeEvent(event)
 
 
+class AlphaOverlayWidget(QWidget):
+    closed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__(None)
+        self._payload = {}
+        self.resize(720, 320)
+        self.setMinimumSize(520, 240)
+        self.setWindowTitle("MoE Alpha Monitor")
+        self.setStyleSheet("background-color: #000000;")
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+
+    def clear_overlay(self):
+        self._payload = {}
+        self.hide()
+
+    def update_overlay(self, payload: dict):
+        if not payload or not payload.get("history"):
+            self.clear_overlay()
+            return
+        self._payload = dict(payload)
+        env_id = str(self._payload.get("env_id", "robot")).replace("_", " ").title()
+        self.setWindowTitle(f"MoE Alpha Monitor | {env_id}")
+        self.show()
+        self.raise_()
+        self.update()
+
+    @staticmethod
+    def _clamp(value, low, high):
+        return max(low, min(high, value))
+
+    def _draw_text(self, painter, x, y, text, color, size=10, bold=False, align=Qt.AlignLeft):
+        font = QFont("DejaVu Sans", max(1, int(size)))
+        font.setBold(bold)
+        painter.setFont(font)
+        painter.setPen(QColor(color))
+        rect = QRectF(x, y - size * 1.4, 640, size * 2.0)
+        painter.drawText(rect, align | Qt.AlignVCenter, text)
+
+    def paintEvent(self, event):
+        if not self._payload:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor("#000000"))
+
+        rect = QRectF(self.rect().adjusted(12, 12, -12, -12))
+        shell = QPainterPath()
+        shell.addRoundedRect(rect, 14, 14)
+        painter.fillPath(shell, QColor("#050505"))
+        painter.setPen(QPen(QColor("#B8B8B8"), 1.1))
+        painter.drawPath(shell)
+
+        env_id = str(self._payload.get("env_id", "robot")).replace("_", " ").title()
+        dt = float(self._payload.get("dt", 0.02))
+        history = [float(v) for v in self._payload.get("history", [])]
+        latest = float(history[-1]) if history else 0.0
+
+        self._draw_text(painter, rect.left() + 18, rect.top() + 28, "MoE Alpha Monitor", "#FFFFFF", 15, True)
+        self._draw_text(
+            painter,
+            rect.left() + 18,
+            rect.top() + 54,
+            f"{env_id} | alpha {latest:.4f} | samples {len(history)}",
+            "#FFFFFF",
+            10,
+            False,
+        )
+
+        plot = QRectF(rect.left() + 64, rect.top() + 82, rect.width() - 88, rect.height() - 124)
+        painter.fillRect(plot, QColor("#000000"))
+        painter.setPen(QPen(QColor("#3F3F46"), 1.0, Qt.DashLine))
+        for i in range(6):
+            y = plot.top() + plot.height() * i / 5.0
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+        for i in range(5):
+            x = plot.left() + plot.width() * i / 4.0
+            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
+
+        for mark, label in ((0.0, "0.0"), (0.5, "0.5"), (1.0, "1.0")):
+            y = plot.bottom() - plot.height() * mark
+            painter.setPen(QPen(QColor("#71717A"), 1.0))
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+            self._draw_text(painter, rect.left() + 18, y + 4, label, "#FFFFFF", 9, True)
+
+        if len(history) >= 2:
+            points = []
+            for idx, value in enumerate(history):
+                x = plot.left() + plot.width() * idx / max(1, len(history) - 1)
+                y = plot.bottom() - plot.height() * self._clamp(float(value), 0.0, 1.0)
+                points.append(QPointF(x, y))
+            painter.setPen(QPen(QColor("#22D3EE"), 2.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            for a, b in zip(points[:-1], points[1:]):
+                painter.drawLine(a, b)
+            painter.setBrush(QColor("#22D3EE"))
+            painter.setPen(QPen(QColor("#FFFFFF"), 1.0))
+            painter.drawEllipse(points[-1], 4.5, 4.5)
+
+        duration = max(0.0, (len(history) - 1) * dt)
+        self._draw_text(painter, plot.left(), rect.bottom() - 18, "0.0s", "#FFFFFF", 8, True)
+        self._draw_text(painter, plot.center().x() - 16, rect.bottom() - 18, "time", "#FFFFFF", 8, True)
+        self._draw_text(painter, plot.right() - 46, rect.bottom() - 18, f"{duration:.1f}s", "#FFFFFF", 8, True)
+
+    def closeEvent(self, event):
+        self._payload = {}
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 class DepthImageWidget(QWidget):
     closed = pyqtSignal()
 

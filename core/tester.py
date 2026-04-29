@@ -4,6 +4,7 @@ from collections import deque
 import glfw
 import numpy as np
 import mujoco
+import onnxruntime as ort
 from core.policy import build_policy
 from core.depth_streamer import DepthStreamClient
 from core.heightmap_dataset_writer import HeightMapDatasetWriter
@@ -18,6 +19,7 @@ class Tester(QObject):
     stepFinished = pyqtSignal()
     overlayUpdated = pyqtSignal(dict)
     depthUpdated = pyqtSignal(object)
+    alphaUpdated = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
@@ -47,6 +49,13 @@ class Tester(QObject):
         self._height_map_inference_path = ""
         self._height_map_inferencer = None
         self._height_map_inference_warned = False
+        self._moe_alpha_enabled = False
+        self._moe_alpha_path = ""
+        self._moe_alpha_session = None
+        self._moe_alpha_input_name = ""
+        self._moe_alpha_output_names = []
+        self._moe_alpha_history = deque(maxlen=180)
+        self._moe_alpha_warned = False
         self._height_map_site_ids_by_prefix = {}
         self._depth_randomization_cfg = {}
         self._depth_camera_name = "depth_camera"
@@ -80,6 +89,13 @@ class Tester(QObject):
         self._height_map_inference_path = str(self._height_map_cfg.get("inference_onnx_path", "")).strip()
         self._height_map_inferencer = None
         self._height_map_inference_warned = False
+        self._moe_alpha_enabled = bool(monitoring_cfg.get("moe_alpha_enabled", False))
+        self._moe_alpha_path = str(monitoring_cfg.get("moe_alpha_onnx_path", "")).strip()
+        self._moe_alpha_session = None
+        self._moe_alpha_input_name = ""
+        self._moe_alpha_output_names = []
+        self._moe_alpha_history = deque(maxlen=180)
+        self._moe_alpha_warned = False
         self._height_map_site_ids_by_prefix = {}
         self._depth_enabled = bool(monitoring_cfg.get("depth_enabled", False)) or self._dataset_enabled or self._height_map_inference_enabled
         self._depth_scale = max(1, int(monitoring_cfg.get("depth_scale", 8) or 8))
@@ -151,6 +167,55 @@ class Tester(QObject):
         if self.policy is not None and hasattr(self.policy, "clear_manual_bias"):
             self.policy.clear_manual_bias()
 
+    def _init_moe_alpha_visualization(self):
+        if not self._moe_alpha_enabled:
+            self.alphaUpdated.emit({})
+            return
+        if not self._moe_alpha_path or not os.path.isfile(self._moe_alpha_path):
+            print(f"[WARN] MoE alpha visualization ONNX not found: {self._moe_alpha_path}")
+            self.alphaUpdated.emit({})
+            return
+        try:
+            self._moe_alpha_session = ort.InferenceSession(self._moe_alpha_path, providers=["CPUExecutionProvider"])
+            self._moe_alpha_input_name = self._moe_alpha_session.get_inputs()[0].name
+            self._moe_alpha_output_names = [output.name for output in self._moe_alpha_session.get_outputs()]
+            self._moe_alpha_history.clear()
+            print(f"[moe-alpha] loaded {self._moe_alpha_path}")
+        except Exception as exc:
+            print(f"[WARN] Failed to load MoE alpha ONNX: {exc}")
+            self._moe_alpha_session = None
+            self.alphaUpdated.emit({})
+
+    def _update_moe_alpha_visualization(self, state):
+        if not self._moe_alpha_enabled or self._moe_alpha_session is None:
+            return
+        obs = np.asarray(state, dtype=np.float32)
+        try:
+            alpha = self._moe_alpha_session.run(
+                self._moe_alpha_output_names,
+                {self._moe_alpha_input_name: np.expand_dims(obs, axis=0)},
+            )[0]
+        except Exception:
+            try:
+                alpha = self._moe_alpha_session.run(
+                    self._moe_alpha_output_names,
+                    {self._moe_alpha_input_name: obs},
+                )[0]
+            except Exception as exc:
+                if not self._moe_alpha_warned:
+                    print(f"[WARN] Failed to run MoE alpha visualization: {exc}")
+                    self._moe_alpha_warned = True
+                return
+        value = float(np.asarray(alpha, dtype=np.float32).reshape(-1)[0])
+        value = float(np.clip(value, 0.0, 1.0))
+        self._moe_alpha_history.append(value)
+        self.alphaUpdated.emit({
+            "env_id": self.config.get("env", {}).get("id", "robot"),
+            "dt": self._monitor_dt(),
+            "alpha": value,
+            "history": list(self._moe_alpha_history),
+        })
+
     def set_monitor_joints(self, joint_names):
         names = []
         for joint_name in joint_names or []:
@@ -206,6 +271,7 @@ class Tester(QObject):
         self._init_depth_stream()
         self._init_height_map_visualization()
         self._init_height_map_inference()
+        self._init_moe_alpha_visualization()
         self._init_dataset_writer()
         self._monitor_history = {joint_name: deque(maxlen=self._monitor_history_len) for joint_name in self._monitor_joint_names}
         self._monitor_session_history = {joint_name: [] for joint_name in self._monitor_joint_names}
@@ -240,6 +306,7 @@ class Tester(QObject):
             next_state, terminated, truncated, info = self.env.step(action)
             self.reporter.write_info(info)
             self._update_height_map_visualization()
+            self._update_moe_alpha_visualization(state)
             self._emit_overlay_payload()
             self._emit_depth_payload()
             self.stepFinished.emit()
@@ -254,6 +321,7 @@ class Tester(QObject):
                 print(f"[WARN] Report generation skipped: {exc}")
         self.overlayUpdated.emit({})
         self.depthUpdated.emit({})
+        self.alphaUpdated.emit({})
         self.close()
         self.finished.emit()
 
@@ -487,8 +555,12 @@ class Tester(QObject):
             return
         env_id = (self.config.get("env", {}) or {}).get("id", "")
         leaf_env = self._get_leaf_env()
-        dt = 1.0 / float(getattr(leaf_env, "control_freq", 50.0)) if leaf_env is not None else 0.02
+        dt = self._monitor_dt()
         self.overlayUpdated.emit({"env_id": env_id, "dt": dt, "joints": snapshot})
+
+    def _monitor_dt(self):
+        leaf_env = self._get_leaf_env()
+        return 1.0 / float(getattr(leaf_env, "control_freq", 50.0)) if leaf_env is not None else 0.02
 
     def _init_depth_stream(self):
         self._depth_stream = None

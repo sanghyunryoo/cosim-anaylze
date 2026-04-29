@@ -13,7 +13,7 @@ from PyQt5.QtCore import QThread, Qt, QEvent, QUrl, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QDesktopServices, QFont, QFontDatabase, QIcon, QColor, QTextCharFormat, QTextCursor
 from core.tester import Tester
 from ui.utils import to_float, to_int, normalize_numkey_float_values
-from ui.custom_widgets import DepthImageWidget, MujocoOverlayWidget, NoWheelComboBox, NoWheelSlider, NonClickableButton
+from ui.custom_widgets import AlphaOverlayWidget, DepthImageWidget, MujocoOverlayWidget, NoWheelComboBox, NoWheelSlider, NonClickableButton
 from ui.dialogs.action_scale_settings import ActionScaleSettingsDialog
 from ui.dialogs.actuator_settings import ActuatorSettingsDialog
 from ui.dialogs.hardware_settings import HardwareSettingsDialog
@@ -142,6 +142,8 @@ class MainWindow(QMainWindow):
         self._moe_last_summary_by_env = {}
         self.mujoco_overlay = MujocoOverlayWidget()
         self.mujoco_overlay.closed.connect(self._on_monitor_overlay_closed)
+        self.alpha_overlay = AlphaOverlayWidget()
+        self.alpha_overlay.closed.connect(self._on_alpha_overlay_closed)
         self.depth_image_widget = DepthImageWidget()
         self.depth_image_widget.closed.connect(self._on_depth_widget_closed)
         self._log_emitter = _QtLogEmitter()
@@ -592,6 +594,13 @@ class MainWindow(QMainWindow):
     def _moe_dataset_root(self, env_id: str):
         return os.path.join(self._repo_root(), "envs", env_id, "dataset", "moe_gate")
 
+    def _moe_alpha_onnx_path(self, env_id: str):
+        latest_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "moe_gate", "latest")
+        alpha_path = os.path.join(latest_dir, "moe_alpha.onnx")
+        if os.path.isfile(alpha_path):
+            return alpha_path
+        return os.path.join(latest_dir, "moe_gate.onnx")
+
     def _list_moe_datasets(self, env_id: str):
         dataset_root = self._moe_dataset_root(env_id)
         if not os.path.isdir(dataset_root):
@@ -861,6 +870,21 @@ class MainWindow(QMainWindow):
             self.monitor_window_toggle_cb.blockSignals(True)
             self.monitor_window_toggle_cb.setChecked(False)
             self.monitor_window_toggle_cb.blockSignals(False)
+
+    def _on_alpha_vis_toggled(self, checked):
+        if not checked:
+            self.alpha_overlay.clear_overlay()
+
+    def _update_alpha_overlay(self, payload):
+        if not hasattr(self, "moe_alpha_vis_cb") or not self.moe_alpha_vis_cb.isChecked():
+            return
+        self.alpha_overlay.update_overlay(payload if isinstance(payload, dict) else {})
+
+    def _on_alpha_overlay_closed(self):
+        if hasattr(self, "moe_alpha_vis_cb"):
+            self.moe_alpha_vis_cb.blockSignals(True)
+            self.moe_alpha_vis_cb.setChecked(False)
+            self.moe_alpha_vis_cb.blockSignals(False)
 
     def _env_has_depth_camera(self, env_id: str) -> bool:
         xml_map = {
@@ -1610,12 +1634,15 @@ class MainWindow(QMainWindow):
         self.moe_manual_btn = QPushButton("Manual")
         self.moe_manual_btn.setFixedWidth(80)
         self.moe_manual_btn.clicked.connect(self.open_moe_manual_dialog)
+        self.moe_alpha_vis_cb = QCheckBox("Alpha Vis")
+        self.moe_alpha_vis_cb.toggled.connect(self._on_alpha_vis_toggled)
 
         self.moe_status_inline_label = QLabel("")
         self.moe_status_inline_label.setStyleSheet("color: #64748B;")
 
         moe_row_layout.addWidget(self.moe_train_inline_btn)
         moe_row_layout.addWidget(self.moe_manual_btn)
+        moe_row_layout.addWidget(self.moe_alpha_vis_cb)
         moe_row_layout.addWidget(self.moe_status_inline_label, 1)
 
         env_layout.addRow("MoE:", moe_row)
@@ -2687,6 +2714,7 @@ class MainWindow(QMainWindow):
         self.tester.load_policy(policy_file_path)
         self.tester.overlayUpdated.connect(self._update_monitor_overlay)
         self.tester.depthUpdated.connect(self._update_depth_overlay)
+        self.tester.alphaUpdated.connect(self._update_alpha_overlay)
         if self.policy_type_cb.currentText().strip().lower() == "encoder+mlp":
             if not encoder_file_path or not os.path.isfile(encoder_file_path):
                 self._restore_log_streams()
@@ -2910,6 +2938,8 @@ class MainWindow(QMainWindow):
                     "depth_scale": depth_scale,
                     "depth_randomization": depth_randomization_cfg,
                     "height_map": dataset_height_map,
+                    "moe_alpha_enabled": bool(getattr(self, "moe_alpha_vis_cb", None) and self.moe_alpha_vis_cb.isChecked()),
+                    "moe_alpha_onnx_path": self._moe_alpha_onnx_path(self.env_id_cb.currentText()),
                 },
                 "fine_tune": {
                     "enabled": bool(fine_tune_cfg.get("enabled", False)),
@@ -2936,6 +2966,7 @@ class MainWindow(QMainWindow):
     def _reset_ui_after_test(self):
         self._restore_log_streams()
         self.mujoco_overlay.clear_overlay()
+        self.alpha_overlay.clear_overlay()
         self.depth_image_widget.clear_frame()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
@@ -2994,6 +3025,7 @@ class MainWindow(QMainWindow):
         self.depth_image_widget.clear_frame()
         self._restore_log_streams()
         self.mujoco_overlay.clear_overlay()
+        self.alpha_overlay.clear_overlay()
         if self.vision_train_dialog is not None and self.vision_train_dialog.isVisible():
             self.vision_train_dialog.close()
         if self.vision_train_thread is not None and self.vision_train_thread.isRunning():
