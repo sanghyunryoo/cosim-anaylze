@@ -10,6 +10,7 @@ from envs.bon_p_v1.utils.math_utils import MathUtils
 from envs.bon_p_v1.utils.mujoco_utils import MuJoCoUtils
 from envs.bon_p_v1.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class BonPV1(MujocoEnv, utils.EzPickle):
@@ -28,6 +29,7 @@ class BonPV1(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
         self.render_mode = render_mode
         self.render_flag = render_flag
         
@@ -189,14 +191,15 @@ class BonPV1(MujocoEnv, utils.EzPickle):
         r_vel_leg = dof_vel[12:14] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[12:14]  # Joint space -> Motor space
         r_vel_wheel = dof_vel[14:16]
 
-        f_hip_action_scaled = self.filtered_action[0:2] * self.action_scaler[0:2]
-        f_shoulder_action_scaled = self.filtered_action[2:4] * self.action_scaler[2:4]
-        f_leg_action_scaled = self.filtered_action[4:6] * self.action_scaler[4:6]
-        f_wheel_action_scaled = self.filtered_action[6:8] * self.action_scaler[6:8]
-        r_hip_action_scaled = self.filtered_action[8:10] * self.action_scaler[8:10]
-        r_shoulder_action_scaled = self.filtered_action[10:12] * self.action_scaler[10:12]
-        r_leg_action_scaled = self.filtered_action[12:14] * self.action_scaler[12:14]
-        r_wheel_action_scaled = self.filtered_action[14:16] * self.action_scaler[14:16]
+        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        f_hip_action_scaled = action_scaled[0:2]
+        f_shoulder_action_scaled = action_scaled[2:4]
+        f_leg_action_scaled = action_scaled[4:6]
+        f_wheel_action_scaled = action_scaled[6:8]
+        r_hip_action_scaled = action_scaled[8:10]
+        r_shoulder_action_scaled = action_scaled[10:12]
+        r_leg_action_scaled = action_scaled[12:14]
+        r_wheel_action_scaled = action_scaled[14:16]
 
 
         f_hip_torques = self.control_manager.pd_controller(self.kp_hip, f_hip_action_scaled, f_pos_hip, self.kd_hip, 0.0, f_vel_hip)
@@ -250,7 +253,7 @@ class BonPV1(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state
         }
         return info
@@ -314,4 +317,3 @@ class BonPV1(MujocoEnv, utils.EzPickle):
             self.viewer = None
             print("Viewer closed")
         super().close()  # Call the parent class's close method to ensure everything is properly closed
-

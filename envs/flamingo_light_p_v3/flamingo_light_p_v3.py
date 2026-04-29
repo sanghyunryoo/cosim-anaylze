@@ -10,6 +10,7 @@ from envs.flamingo_light_p_v3.utils.math_utils import MathUtils
 from envs.flamingo_light_p_v3.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_light_p_v3.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
@@ -26,6 +27,7 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
         self.render_mode = render_mode
         self.render_flag = render_flag
 
@@ -148,8 +150,9 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
         vel_shoulder = dof_vel[0:2]
         vel_wheel = dof_vel[2:4]
         
-        shoulder_action_scaled = self.action[0:2] * self.action_scaler[0:2]
-        wheel_action_scaled = self.action[2:4] * self.action_scaler[2:4]
+        action_scaled = scale_and_clip_action(self.action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        shoulder_action_scaled = action_scaled[0:2]
+        wheel_action_scaled = action_scaled[2:4]
 
         shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, shoulder_action_scaled, pos_shoulder, self.kd_shoulder, 0.0, vel_shoulder)
         wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
@@ -186,7 +189,7 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state
         }
         return info
@@ -267,4 +270,3 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
             self.viewer = None
             print("Viewer closed")
         super().close()  # Call the parent class's close method to ensure everything is properly closed
-

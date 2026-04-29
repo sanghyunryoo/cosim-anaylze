@@ -13,6 +13,7 @@ from envs.humanoid_light_v1.utils.noise_generator_utils import (
     truncated_gaussian_noisy_data,
 )
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class HumanoidLightV1(MujocoEnv, utils.EzPickle):
@@ -53,6 +54,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple, np.ndarray)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
 
         # --- PD params (support both new keys and old legacy keys) ---
         hw = config["hardware"]
@@ -208,6 +210,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             self.prev_action = np.zeros(self.action_dim, dtype=np.float64)
             self.applied_torques = np.zeros(self.action_dim, dtype=np.float64)
             self.action_scaler = np.ones(self.action_dim, dtype=np.float64)
+            self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
 
         # --- Observation dims (dynamic) ---
         dof_dim = len(self.joint_names_in_order)
@@ -364,21 +367,22 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         s_wrist       = sl(24, 26)  # L,R
 
         # Targets (scaled actions)
-        tgt_head        = self.filtered_action[s_head]        * self.action_scaler[s_head]
-        tgt_hip_pitch   = self.filtered_action[s_hip_pitch]   * self.action_scaler[s_hip_pitch]
-        tgt_hip_roll    = self.filtered_action[s_hip_roll]    * self.action_scaler[s_hip_roll]
-        tgt_hip_yaw     = self.filtered_action[s_hip_yaw]     * self.action_scaler[s_hip_yaw]
-        tgt_knee        = self.filtered_action[s_knee]        * self.action_scaler[s_knee]
-        tgt_ank_pitch   = self.filtered_action[s_ank_pitch]   * self.action_scaler[s_ank_pitch]
-        tgt_ank_roll    = self.filtered_action[s_ank_roll]    * self.action_scaler[s_ank_roll]
-        tgt_torso_yaw   = self.filtered_action[s_torso_yaw]   * self.action_scaler[s_torso_yaw]
-        tgt_torso_roll  = self.filtered_action[s_torso_roll]  * self.action_scaler[s_torso_roll]
-        tgt_torso_pitch = self.filtered_action[s_torso_pitch] * self.action_scaler[s_torso_pitch]
-        tgt_sh_pitch    = self.filtered_action[s_sh_pitch]    * self.action_scaler[s_sh_pitch]
-        tgt_sh_roll     = self.filtered_action[s_sh_roll]     * self.action_scaler[s_sh_roll]
-        tgt_sh_yaw      = self.filtered_action[s_sh_yaw]      * self.action_scaler[s_sh_yaw]
-        tgt_elbow       = self.filtered_action[s_elbow]       * self.action_scaler[s_elbow]
-        tgt_wrist       = self.filtered_action[s_wrist]       * self.action_scaler[s_wrist]
+        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        tgt_head        = action_scaled[s_head]
+        tgt_hip_pitch   = action_scaled[s_hip_pitch]
+        tgt_hip_roll    = action_scaled[s_hip_roll]
+        tgt_hip_yaw     = action_scaled[s_hip_yaw]
+        tgt_knee        = action_scaled[s_knee]
+        tgt_ank_pitch   = action_scaled[s_ank_pitch]
+        tgt_ank_roll    = action_scaled[s_ank_roll]
+        tgt_torso_yaw   = action_scaled[s_torso_yaw]
+        tgt_torso_roll  = action_scaled[s_torso_roll]
+        tgt_torso_pitch = action_scaled[s_torso_pitch]
+        tgt_sh_pitch    = action_scaled[s_sh_pitch]
+        tgt_sh_roll     = action_scaled[s_sh_roll]
+        tgt_sh_yaw      = action_scaled[s_sh_yaw]
+        tgt_elbow       = action_scaled[s_elbow]
+        tgt_wrist       = action_scaled[s_wrist]
 
         # Current states
         pos_head,        vel_head        = dof_pos[s_head],        dof_vel[s_head]
@@ -535,7 +539,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             "lin_vel_x": float(lin_vel[0]),
             "lin_vel_y": float(lin_vel[1]),
             "ang_vel_yaw": float(ang_vel[2]),
-            "set_points": (self.action * self.action_scaler).copy(),
+            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max).copy(),
             "state": dof_pos.copy(),
         }
         return info

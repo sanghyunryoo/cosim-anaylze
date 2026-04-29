@@ -195,10 +195,25 @@ class StateBuildWrapper(BaseEnv):
             return None
 
     def _get_action_values(self) -> np.ndarray:
-        action = getattr(self.env, "action", None)
+        action = getattr(self.env, "filtered_action", None)
+        if action is None:
+            action = getattr(self.env, "action", None)
         if action is None:
             return np.zeros((0,), dtype=np.float64)
-        return np.asarray(action, dtype=np.float64).reshape(-1)
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
+
+        scaler = getattr(self.env, "action_scaler", None)
+        clip_min = getattr(self.env, "action_clip_min", None)
+        clip_max = getattr(self.env, "action_clip_max", None)
+        if scaler is None or clip_min is None or clip_max is None:
+            return action
+
+        scaler = np.asarray(scaler, dtype=np.float64).reshape(-1)
+        clip_min = np.asarray(clip_min, dtype=np.float64).reshape(-1)
+        clip_max = np.asarray(clip_max, dtype=np.float64).reshape(-1)
+        if len(action) != len(scaler) or len(action) != len(clip_min) or len(action) != len(clip_max):
+            return action
+        return np.clip(action * scaler, clip_min, clip_max)
 
     def _print_pretty_observation(self, obs: dict, phase: str):
         data = self.env.get_data()

@@ -10,6 +10,7 @@ from envs.flamingo_p_v3_1.utils.math_utils import MathUtils
 from envs.flamingo_p_v3_1.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_p_v3_1.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class FlamingoPV31(MujocoEnv, utils.EzPickle):
@@ -31,6 +32,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
 
         self.render_mode = render_mode
         self.render_flag = render_flag
@@ -188,9 +190,10 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         vel_leg = dof_vel[4:6] * self.gear_ratio if self.use_gear else dof_vel[4:6]
 
         # Scale actions
-        hip_action_scaled = self.filtered_action[0:2] * self.action_scaler[0:2]
-        shoulder_action_scaled = self.filtered_action[2:4] * self.action_scaler[2:4]
-        leg_action_scaled = self.filtered_action[4:6] * self.action_scaler[4:6]
+        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        hip_action_scaled = action_scaled[0:2]
+        shoulder_action_scaled = action_scaled[2:4]
+        leg_action_scaled = action_scaled[4:6]
 
         # PD control for legs
         hip_torques = self.control_manager.pd_controller(self.kp_hip, hip_action_scaled, pos_hip, self.kd_hip, 0.0, vel_hip)
@@ -208,7 +211,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         # If wheels exist, add wheel control (pure D + FF)
         if self.has_wheels:
             vel_wheel = dof_vel[6:8]
-            wheel_action_scaled = self.filtered_action[6:8] * self.action_scaler[6:8]
+            wheel_action_scaled = action_scaled[6:8]
             wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
             wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
             torques_list.append(wheel_torques_clipped)
@@ -248,7 +251,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             "lin_vel_y": lin_vel[1],
             "base_height": base_height,
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state,
         }
         return info

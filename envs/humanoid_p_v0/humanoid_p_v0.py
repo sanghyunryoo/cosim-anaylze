@@ -10,6 +10,7 @@ from envs.humanoid_p_v0.utils.math_utils import MathUtils
 from envs.humanoid_p_v0.utils.mujoco_utils import MuJoCoUtils
 from envs.humanoid_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class HumanoidPV0(MujocoEnv, utils.EzPickle):
@@ -24,6 +25,7 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple, np.ndarray)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
         self.render_mode = render_mode
         self.render_flag = render_flag
 
@@ -188,18 +190,19 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         pos_elbow_yaw, vel_elbow_yaw = dof_pos[21:23], dof_vel[21:23]
 
         # Get the scaled action
-        hip_pitch_action_scaled = self.filtered_action[0:2] * self.action_scaler[0:2]
-        torso_action_scaled = self.filtered_action[2:3] * self.action_scaler[2:3]
-        hip_roll_action_scaled = self.filtered_action[3:5] * self.action_scaler[3:5]
-        shoulder_pitch_action_scaled = self.filtered_action[5:7] * self.action_scaler[5:7]
-        hip_yaw_action_scaled = self.filtered_action[7:9] * self.action_scaler[7:9]
-        shoulder_roll_action_scaled = self.filtered_action[9:11] * self.action_scaler[9:11]
-        knee_action_scaled = self.filtered_action[11:13] * self.action_scaler[11:13]
-        shoulder_yaw_action_scaled = self.filtered_action[13:15] * self.action_scaler[13:15]
-        ankle_pitch_action_scaled = self.filtered_action[15:17] * self.action_scaler[15:17]
-        elbow_pitch_action_scaled = self.filtered_action[17:19] * self.action_scaler[17:19]
-        ankle_roll_action_scaled = self.filtered_action[19:21] * self.action_scaler[19:21]
-        elbow_yaw_action_scaled = self.filtered_action[21:23] * self.action_scaler[21:23]
+        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        hip_pitch_action_scaled = action_scaled[0:2]
+        torso_action_scaled = action_scaled[2:3]
+        hip_roll_action_scaled = action_scaled[3:5]
+        shoulder_pitch_action_scaled = action_scaled[5:7]
+        hip_yaw_action_scaled = action_scaled[7:9]
+        shoulder_roll_action_scaled = action_scaled[9:11]
+        knee_action_scaled = action_scaled[11:13]
+        shoulder_yaw_action_scaled = action_scaled[13:15]
+        ankle_pitch_action_scaled = action_scaled[15:17]
+        elbow_pitch_action_scaled = action_scaled[17:19]
+        ankle_roll_action_scaled = action_scaled[19:21]
+        elbow_yaw_action_scaled = action_scaled[21:23]
 
         hip_pitch_torques = self.control_manager.pd_controller(self.kp_hip_pitch, hip_pitch_action_scaled, pos_hip_pitch, self.kd_hip_pitch, 0.0, vel_hip_pitch)
         torso_torques = self.control_manager.pd_controller(self.kp_torso, torso_action_scaled, pos_torso, self.kd_torso, 0.0, vel_torso)
@@ -257,7 +260,7 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state
         }
         return info

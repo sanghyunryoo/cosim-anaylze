@@ -13,6 +13,7 @@ from envs.wheeldog_p_v2.utils.noise_generator_utils import (
     truncated_gaussian_noisy_data,
 )
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class WheelDogPV2(MujocoEnv, utils.EzPickle):
@@ -31,6 +32,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
         self.render_mode = render_mode
         self.render_flag = render_flag
 
@@ -301,7 +303,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
             leg_vel_idx = [4, 5, 12, 13]
             q_full[leg_pos_idx] = q_full[leg_pos_idx] * self.gear_ratio
             d_full[leg_vel_idx] = d_full[leg_vel_idx] * self.gear_ratio
-        action_scaled = self.action * self.action_scaler
+        action_scaled = scale_and_clip_action(self.action, self.action_scaler, self.action_clip_min, self.action_clip_max)
 
         kp_vec, kd_vec, td_vec = self._build_control_vectors(action_scaled)
 
@@ -346,7 +348,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state,
         }
         return info

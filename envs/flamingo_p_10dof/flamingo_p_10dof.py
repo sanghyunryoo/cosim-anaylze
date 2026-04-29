@@ -10,6 +10,7 @@ from envs.flamingo_p_10dof.utils.math_utils import MathUtils
 from envs.flamingo_p_10dof.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_p_10dof.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class FlamingoP10dof(MujocoEnv, utils.EzPickle):
@@ -51,6 +52,7 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
         if not isinstance(cfg_action_scales, (list, tuple)) or len(cfg_action_scales) != self.action_dim:
             cfg_action_scales = default_action_scales
         self.action_scaler = np.array(cfg_action_scales, dtype=np.float64)
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
 
         self.render_mode = render_mode
         self.render_flag = render_flag
@@ -211,10 +213,11 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
         vel_hip_yaw = dof_vel[4:6]
         vel_leg = dof_vel[6:8]
 
-        hip_pitch_action = self.filtered_action[0:2] * self.action_scaler[0:2]
-        hip_roll_action = self.filtered_action[2:4] * self.action_scaler[2:4]
-        hip_yaw_action = self.filtered_action[4:6] * self.action_scaler[4:6]
-        leg_action = self.filtered_action[6:8] * self.action_scaler[6:8]
+        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        hip_pitch_action = action_scaled[0:2]
+        hip_roll_action = action_scaled[2:4]
+        hip_yaw_action = action_scaled[4:6]
+        leg_action = action_scaled[6:8]
 
         hip_pitch_torques = self.control_manager.pd_controller(self.kp_hip_pitch, hip_pitch_action, pos_hip_pitch, self.kd_hip_pitch, 0.0, vel_hip_pitch)
         hip_roll_torques = self.control_manager.pd_controller(self.kp_hip_roll, hip_roll_action, pos_hip_roll, self.kd_hip_roll, 0.0, vel_hip_roll)
@@ -234,7 +237,7 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
         # If wheels exist, add wheel control (pure D + FF)
         if self.has_wheels:
             vel_wheel = dof_vel[8:10]
-            wheel_action_scaled = self.filtered_action[8:10] * self.action_scaler[8:10]
+            wheel_action_scaled = action_scaled[8:10]
             wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
             wheel_torques_clipped = np.clip(wheel_torques, -self.wheel_torque_limits, self.wheel_torque_limits)
             torques_list.append(wheel_torques_clipped)
@@ -269,7 +272,7 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state,
         }
         return info

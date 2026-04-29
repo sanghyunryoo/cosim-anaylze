@@ -98,13 +98,17 @@ class MainWindow(QMainWindow):
         self.tester = None
         self.current_command_values = [0.0] * 6
         self.command_sensitivity_le_list = []
+        self.min_command_value_le_list = []
         self.max_command_value_le_list = []
         self.command_initial_value_le_list = []
+        self.command_discrete_cb_list = []
         self.command_timer = None
         self.actuator_settings = {}
         self.actuator_settings_by_env = {}
         self.action_scales = []
         self.action_scales_by_env = {}
+        self.action_clippings = []
+        self.action_clippings_by_env = {}
         self.hardware_settings = {}
         self.hardware_settings_by_env = {}
         self.initial_pose_settings = {}
@@ -262,11 +266,45 @@ class MainWindow(QMainWindow):
                 scales = scales[:action_dim]
         return scales
 
+    def _make_action_clipping_defaults(self, env_id: str):
+        env_cfg = self.env_config.get(env_id, {}) or {}
+        action_dim = to_int((env_cfg.get("hardware", {}) or {}).get("action_dim", 0), 0)
+        raw = env_cfg.get("action_clippings", [])
+        clippings = []
+        if isinstance(raw, list):
+            for item in raw[:action_dim]:
+                if isinstance(item, dict):
+                    enabled = bool(item.get("enabled", False))
+                    min_value = to_float(item.get("min", -1.0), -1.0)
+                    max_value = to_float(item.get("max", 1.0), 1.0)
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    enabled = True
+                    min_value = to_float(item[0], -1.0)
+                    max_value = to_float(item[1], 1.0)
+                else:
+                    enabled = False
+                    min_value = -1.0
+                    max_value = 1.0
+                if min_value > max_value:
+                    min_value, max_value = max_value, min_value
+                clippings.append({"enabled": enabled, "min": min_value, "max": max_value})
+
+        if action_dim > 0 and len(clippings) != action_dim:
+            clippings.extend(
+                {"enabled": False, "min": -1.0, "max": 1.0}
+                for _ in range(action_dim - len(clippings))
+            )
+            clippings = clippings[:action_dim]
+        return clippings
+
     def _ensure_action_scale_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.action_scales_by_env:
             self.action_scales_by_env[env_id] = self._make_action_scale_defaults(env_id)
         self.action_scales = list(self.action_scales_by_env[env_id])
+        if env_id not in self.action_clippings_by_env:
+            self.action_clippings_by_env[env_id] = self._make_action_clipping_defaults(env_id)
+        self.action_clippings = [dict(item) for item in self.action_clippings_by_env[env_id]]
 
     # ---------------- per-env actuator helpers ----------------
     def _detect_actuator_control_axis(self, raw: dict) -> str:
@@ -900,6 +938,11 @@ class MainWindow(QMainWindow):
         else:
             self.action_scales = self._make_action_scale_defaults(new_env_id)
             self.action_scales_by_env[new_env_id] = list(self.action_scales)
+        if new_env_id in self.action_clippings_by_env:
+            self.action_clippings = [dict(item) for item in self.action_clippings_by_env[new_env_id]]
+        else:
+            self.action_clippings = self._make_action_clipping_defaults(new_env_id)
+            self.action_clippings_by_env[new_env_id] = [dict(item) for item in self.action_clippings]
 
         if new_env_id in self.actuator_settings_by_env:
             self.actuator_settings = (self.actuator_settings_by_env[new_env_id]).copy()
@@ -946,6 +989,11 @@ class MainWindow(QMainWindow):
         # UI upper bounds (example retained)
         command_0_max = "1.5"
         command_2_max = "1.5"
+        command_0_min = "-1.5"
+        command_2_min = "-1.5"
+        if self.min_command_value_le_list:
+            self.min_command_value_le_list[0].setText(command_0_min)
+            self.min_command_value_le_list[2].setText(command_2_min)
         if self.max_command_value_le_list:
             self.max_command_value_le_list[0].setText(command_0_max)
             self.max_command_value_le_list[2].setText(command_2_max)
@@ -1031,7 +1079,10 @@ class MainWindow(QMainWindow):
         if key in self.key_mapping and key not in self.active_keys:
             btn, cmd_index, direction = self.key_mapping[key]
             btn.setChecked(True)
-            self.active_keys[key] = {"cmd_index": cmd_index, "direction": direction}
+            is_discrete = self._is_discrete_command(cmd_index)
+            if is_discrete:
+                self._apply_discrete_command_delta(cmd_index, direction)
+            self.active_keys[key] = {"cmd_index": cmd_index, "direction": direction, "discrete": is_discrete}
 
     def handle_key_release(self, event):
         key = event.key()
@@ -1064,6 +1115,8 @@ class MainWindow(QMainWindow):
             for key_info in self.active_keys.values()
         )
         if same_command_still_active:
+            return
+        if self._is_discrete_command(cmd_index):
             return
         default_value = self._get_default_command_value(cmd_index)
         self.current_command_values[cmd_index] = default_value
@@ -1100,24 +1153,50 @@ class MainWindow(QMainWindow):
         self.current_command_values[index] = value
         self._update_status_label()
 
-    def send_current_command(self):
-        # Apply key-driven deltas within bounds, update tester and status
-        for key_info in self.active_keys.values():
-            cmd_index = key_info["cmd_index"]
-            direction = key_info["direction"]
-            step = self._parse_float(self.command_sensitivity_le_list[cmd_index].text(), 0.1)
-            max_command_value = self._parse_float(self.max_command_value_le_list[cmd_index].text(), 2.0)
-            current_value = self.current_command_values[cmd_index]
-            new_value = current_value + direction * step
-            if direction > 0:
-                new_value = min(new_value, max_command_value)
-            else:
-                new_value = max(new_value, -max_command_value)
-            self.current_command_values[cmd_index] = new_value
-            self._update_command_button(cmd_index, new_value)
+    def _is_discrete_command(self, index):
+        try:
+            return self.command_discrete_cb_list[index].isChecked()
+        except Exception:
+            return False
+
+    def _get_command_bounds(self, index):
+        min_value = self._parse_float(self.min_command_value_le_list[index].text(), -2.0)
+        max_value = self._parse_float(self.max_command_value_le_list[index].text(), 2.0)
+        if min_value > max_value:
+            min_value, max_value = max_value, min_value
+        return min_value, max_value
+
+    def _clamp_command_value(self, index, value):
+        min_value, max_value = self._get_command_bounds(index)
+        return min(max(value, min_value), max_value)
+
+    def _push_current_command_to_tester(self):
         if self.tester:
             for i, value in enumerate(self.current_command_values):
                 self.tester.update_command(i, value)
+
+    def _apply_discrete_command_delta(self, index, direction):
+        step = self._parse_float(self.command_sensitivity_le_list[index].text(), 0.1)
+        new_value = self.current_command_values[index] + direction * step
+        new_value = self._clamp_command_value(index, new_value)
+        self.current_command_values[index] = new_value
+        self._update_command_button(index, new_value)
+        self._push_current_command_to_tester()
+
+    def send_current_command(self):
+        # Apply key-driven deltas within bounds, update tester and status
+        for key_info in self.active_keys.values():
+            if key_info.get("discrete", False):
+                continue
+            cmd_index = key_info["cmd_index"]
+            direction = key_info["direction"]
+            step = self._parse_float(self.command_sensitivity_le_list[cmd_index].text(), 0.1)
+            current_value = self.current_command_values[cmd_index]
+            new_value = current_value + direction * step
+            new_value = self._clamp_command_value(cmd_index, new_value)
+            self.current_command_values[cmd_index] = new_value
+            self._update_command_button(cmd_index, new_value)
+        self._push_current_command_to_tester()
         self._update_status_label()
         self._update_fine_tune_status_label()
 
@@ -1600,8 +1679,10 @@ class MainWindow(QMainWindow):
         grid_layout = QGridLayout(command_group)
         grid_layout.addWidget(QLabel("Index"), 0, 0)
         grid_layout.addWidget(QLabel("Sensitivity"), 0, 1)
-        grid_layout.addWidget(QLabel("Max Value"), 0, 2)
-        grid_layout.addWidget(QLabel("Initial Value"), 0, 3)
+        grid_layout.addWidget(QLabel("Min Value"), 0, 2)
+        grid_layout.addWidget(QLabel("Max Value"), 0, 3)
+        grid_layout.addWidget(QLabel("Initial Value"), 0, 4)
+        grid_layout.addWidget(QLabel("Discrete"), 0, 5)
 
         # command[3] initial value is taken from the env's 'command' section
         settings = self.env_config.get(self.env_id_cb.currentText(), {}) or {}
@@ -1611,19 +1692,25 @@ class MainWindow(QMainWindow):
         for i in range(6):  # indices 0~5
             label = QLabel(f"command[{i}]")
             sensitivity_le = QLineEdit("0.02")
+            min_value_le = QLineEdit("-1.5" if i in [0, 1, 2] else "-1")
             max_value_le = QLineEdit("1.5" if i in [0, 1, 2] else "1")
             init_value_widget = QLineEdit(cmd3_init) if i == 3 else QLabel("0.0")
+            discrete_cb = QCheckBox()
             grid_layout.addWidget(label, i + 1, 0)
             grid_layout.addWidget(sensitivity_le, i + 1, 1)
-            grid_layout.addWidget(max_value_le, i + 1, 2)
-            grid_layout.addWidget(init_value_widget, i + 1, 3)
+            grid_layout.addWidget(min_value_le, i + 1, 2)
+            grid_layout.addWidget(max_value_le, i + 1, 3)
+            grid_layout.addWidget(init_value_widget, i + 1, 4)
+            grid_layout.addWidget(discrete_cb, i + 1, 5, Qt.AlignCenter)
             self.command_sensitivity_le_list.append(sensitivity_le)
+            self.min_command_value_le_list.append(min_value_le)
             self.max_command_value_le_list.append(max_value_le)
             self.command_initial_value_le_list.append(init_value_widget)
+            self.command_discrete_cb_list.append(discrete_cb)
         self.position_command_cb = QCheckBox("Position Command")
         self.position_command_cb.setChecked(False)
         row_position = 6 + 1
-        grid_layout.addWidget(self.position_command_cb, row_position, 0, 1, 4, Qt.AlignLeft)
+        grid_layout.addWidget(self.position_command_cb, row_position, 0, 1, 6, Qt.AlignLeft)
         parent_layout.addWidget(command_group)
 
     def _setup_key_visual_buttons(self, parent_layout):
@@ -2134,10 +2221,11 @@ class MainWindow(QMainWindow):
     def open_action_scale_settings(self):
         env_id = self.env_id_cb.currentText()
         self._ensure_action_scale_defaults()
-        dialog = ActionScaleSettingsDialog(list(self.action_scales), self)
+        dialog = ActionScaleSettingsDialog(list(self.action_scales), [dict(item) for item in self.action_clippings], self)
         if dialog.exec_() == QDialog.Accepted:
-            self.action_scales = dialog.get_settings()
+            self.action_scales, self.action_clippings = dialog.get_settings()
             self.action_scales_by_env[env_id] = list(self.action_scales)
+            self.action_clippings_by_env[env_id] = [dict(item) for item in self.action_clippings]
 
     def open_observation_settings(self):
         # Open the dialog with the latest settings for the current env
@@ -2248,6 +2336,18 @@ class MainWindow(QMainWindow):
             hardware_numeric = {k: to_float(v, v) for k, v in self.hardware_settings.items()}
             actuator = (self.actuator_settings).copy()
             action_scales = [to_float(v, 1.0) for v in self.action_scales]
+            action_clippings = []
+            for item in self.action_clippings:
+                item = item if isinstance(item, dict) else {}
+                min_value = to_float(item.get("min", -1.0), -1.0)
+                max_value = to_float(item.get("max", 1.0), 1.0)
+                if min_value > max_value:
+                    min_value, max_value = max_value, min_value
+                action_clippings.append({
+                    "enabled": bool(item.get("enabled", False)),
+                    "min": min_value,
+                    "max": max_value,
+                })
             initial_positions = {
                 "joints": {
                     joint_name: to_float(value, 0.0)
@@ -2410,6 +2510,7 @@ class MainWindow(QMainWindow):
                     "load": self.load_slider.value() / 10.0
                 },
                 "action_scales": action_scales,
+                "action_clippings": action_clippings,
                 "actuator": actuator,
                 "hardware": hardware_numeric,
                 "initial_positions": initial_positions,
@@ -2457,8 +2558,9 @@ class MainWindow(QMainWindow):
         for key in list(self.active_keys.keys()):
             btn, cmd_index, _ = self.key_mapping[key]
             btn.setChecked(False)
-            default_value = self._get_default_command_value(cmd_index)
-            self._update_command_button(cmd_index, default_value)
+            if not self._is_discrete_command(cmd_index):
+                default_value = self._get_default_command_value(cmd_index)
+                self._update_command_button(cmd_index, default_value)
             self.active_keys.pop(key)
 
     def on_test_finished(self):

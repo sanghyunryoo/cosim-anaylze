@@ -9,6 +9,7 @@ from envs.wheeldog_p_v2.manager.xml_manager import XMLManager
 from envs.wheeldog_p_v2.utils.math_utils import MathUtils
 from envs.wheeldog_p_v2.utils.mujoco_utils import MuJoCoUtils
 from envs.wheeldog_p_v2.utils.noise_generator_utils import truncated_gaussian_noisy_data, uniform_noisy_data
+from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
 class WheelDogPV2(MujocoEnv, utils.EzPickle):
@@ -24,6 +25,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         
         wheel_scaler = [40.0, 40.0, 40.0, 40.0] if self.has_wheels else []   
         self.action_scaler = np.array(leg_scaler + wheel_scaler, dtype=np.float64)     
+        self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
         self.render_mode = render_mode
         self.render_flag = render_flag
         
@@ -158,9 +160,10 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         vel_shoulder = dof_vel[4:8]
         vel_leg = dof_vel[8:12] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[8:12]  # Joint space -> Motor space
 
-        hip_action_scaled = self.filtered_action[0:4] * self.action_scaler[0:4]
-        shoulder_action_scaled = self.filtered_action[4:8] * self.action_scaler[4:8]
-        leg_action_scaled = self.filtered_action[8:12] * self.action_scaler[8:12]
+        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        hip_action_scaled = action_scaled[0:4]
+        shoulder_action_scaled = action_scaled[4:8]
+        leg_action_scaled = action_scaled[8:12]
 
         hip_torques = self.control_manager.pd_controller(self.kp_hip, hip_action_scaled, pos_hip, self.kd_hip, 0.0, vel_hip)
         
@@ -177,7 +180,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         # If wheels exist, add wheel control (pure D + FF)
         if self.has_wheels:
             vel_wheel = dof_vel[12:16]
-            wheel_action_scaled = self.filtered_action[12:16] * self.action_scaler[12:16]
+            wheel_action_scaled = action_scaled[12:16]
             wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
             wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
             torques_list.append(wheel_torques_clipped)
@@ -213,7 +216,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": self.action * self.action_scaler,
+            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max),
             "state": joint_state
         }
         return info
@@ -274,5 +277,3 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
             self.viewer = None
             print("Viewer closed")
         super().close()  # Call the parent class's close method to ensure everything is properly closed
-
-

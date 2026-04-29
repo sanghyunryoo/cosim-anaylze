@@ -448,7 +448,7 @@ class Reporter:
             # -------------------------------
             # Final) Configuration Table
             # -------------------------------
-            filtered_config = {k: v for k, v in self.config.items() if k in ["env", "policy", "settings", "random", "hardware", "action_scales"]}
+            filtered_config = {k: v for k, v in self.config.items() if k in ["env", "policy", "settings", "random", "hardware", "action_scales", "action_clippings"]}
             table_data = self._build_config_rows(filtered_config)
             MAX_ROWS_PER_PAGE = 50
             total_rows = len(table_data)
@@ -488,7 +488,7 @@ class Reporter:
                         cell.set_facecolor("#f1f1f2")
                         if col == 0:
                             left_text = cell.get_text().get_text().strip()
-                            if left_text in ["env", "policy", "settings", "random", "hardware", "action_scales"]:
+                            if left_text in ["env", "policy", "settings", "random", "hardware", "action_scales", "action_clippings"]:
                                 cell.set_text_props(fontweight='bold')
 
                 if base_h is None:
