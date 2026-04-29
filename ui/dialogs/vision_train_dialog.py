@@ -23,6 +23,7 @@ class VisionTrainDialog(QDialog):
     trainRequested = pyqtSignal()
     exportRequested = pyqtSignal()
     refreshRequested = pyqtSignal()
+    stopRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -130,9 +131,12 @@ class VisionTrainDialog(QDialog):
         action_row = QHBoxLayout()
         self.train_btn = QPushButton("Train")
         self.export_btn = QPushButton("Export ONNX")
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setEnabled(False)
         self.close_btns = QDialogButtonBox(QDialogButtonBox.Close)
         action_row.addWidget(self.train_btn)
         action_row.addWidget(self.export_btn)
+        action_row.addWidget(self.stop_btn)
         action_row.addStretch()
         action_row.addWidget(self.close_btns)
         layout.addLayout(action_row)
@@ -143,6 +147,7 @@ class VisionTrainDialog(QDialog):
         self.refresh_dataset_btn.clicked.connect(self.refreshRequested.emit)
         self.train_btn.clicked.connect(self.trainRequested.emit)
         self.export_btn.clicked.connect(self.exportRequested.emit)
+        self.stop_btn.clicked.connect(self.stopRequested.emit)
         self.close_btns.rejected.connect(self.close)
         self.close_btns.accepted.connect(self.close)
 
@@ -225,6 +230,7 @@ class VisionTrainDialog(QDialog):
         self._running = bool(running)
         self.train_btn.setEnabled(not self._running)
         self.export_btn.setEnabled(not self._running)
+        self.stop_btn.setEnabled(self._running)
         self.add_dataset_btn.setEnabled(not self._running)
         self.remove_dataset_btn.setEnabled(not self._running)
         self.clear_dataset_btn.setEnabled(not self._running)

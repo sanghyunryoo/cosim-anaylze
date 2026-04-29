@@ -22,7 +22,9 @@ from ui.dialogs.initial_pose_settings import InitialPoseSettingsDialog
 from ui.dialogs.fine_tune_bias_editor import FineTuneBiasEditorDialog
 from ui.dialogs.depth_randomization_settings import DepthRandomizationSettingsDialog
 from ui.dialogs.vision_train_dialog import VisionTrainDialog
-from ui.workers import TesterWorker, VisionTrainerWorker
+from ui.dialogs.moe_train_dialog import MoETrainDialog
+from ui.dialogs.moe_manual_dialog import MoEManualDialog
+from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker
 from PyQt5.QtWidgets import QSizePolicy
 from envs.initial_pose import get_default_initial_joint_map, get_initial_pose_joint_names
 
@@ -95,6 +97,11 @@ class MainWindow(QMainWindow):
         self.vision_train_thread = None
         self.vision_train_worker = None
         self.vision_train_dialog = None
+        self.moe_thread = None
+        self.moe_worker = None
+        self.moe_dialog = None
+        self.moe_worker_mode = None
+        self.moe_manual_dialog = None
         self.tester = None
         self.current_command_values = [0.0] * 6
         self.command_sensitivity_le_list = []
@@ -127,6 +134,12 @@ class MainWindow(QMainWindow):
         self.vision_train_settings_by_env = {}
         self._vision_last_summary = None
         self._vision_last_summary_by_env = {}
+        self.moe_settings = {}
+        self.moe_settings_by_env = {}
+        self.moe_manual_settings = {}
+        self.moe_manual_settings_by_env = {}
+        self._moe_last_summary = None
+        self._moe_last_summary_by_env = {}
         self.mujoco_overlay = MujocoOverlayWidget()
         self.mujoco_overlay.closed.connect(self._on_monitor_overlay_closed)
         self.depth_image_widget = DepthImageWidget()
@@ -483,6 +496,140 @@ class MainWindow(QMainWindow):
                 "label": f"{run_name} | {samples} samples{shape_text}",
             })
         return datasets
+
+    def _terrain_ids(self):
+        return [
+            'flat', 'rocky_easy', 'rocky_hard',
+            'slope_easy', 'slope_hard',
+            'stairs_up_easy', 'stairs_up_normal', 'stairs_up_hard', 'stairs_up_extrme'
+        ]
+
+    def _make_moe_defaults(self, env_id: str):
+        return {
+            "env_id": env_id,
+            "policy_a_path": "",
+            "policy_b_path": "",
+            "terrains": ["flat", "rocky_easy", "rocky_hard", "stairs_up_easy", "stairs_up_normal", "stairs_up_hard"],
+            "samples": "200000",
+            "rollout_steps": "1000",
+            "boundary_m": "8.0",
+            "command_min": "-1.0",
+            "command_max": "1.0",
+            "seed": "42",
+            "epochs": "30",
+            "batch_size": "256",
+            "learning_rate": "1e-3",
+            "lambda_smooth": "0.03",
+            "val_ratio": "0.1",
+            "selected_datasets": [],
+        }
+
+    def _make_moe_manual_defaults(self, env_id: str):
+        output_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "moe_manual")
+        return {
+            "env_id": env_id,
+            "policy_a_path": "",
+            "policy_b_path": "",
+            "manual_alpha": "0.0",
+            "output_path": os.path.join(output_dir, "manual_moe_policy.onnx"),
+        }
+
+    def _ensure_moe_defaults(self):
+        env_id = self.env_id_cb.currentText()
+        if env_id not in self.moe_settings_by_env:
+            self.moe_settings_by_env[env_id] = self._make_moe_defaults(env_id)
+        self.moe_settings = dict(self.moe_settings_by_env[env_id])
+
+    def _ensure_moe_manual_defaults(self):
+        env_id = self.env_id_cb.currentText()
+        if env_id not in self.moe_manual_settings_by_env:
+            self.moe_manual_settings_by_env[env_id] = self._make_moe_manual_defaults(env_id)
+        self.moe_manual_settings = dict(self.moe_manual_settings_by_env[env_id])
+
+    def _collect_moe_ui_settings(self, source_settings=None):
+        self._ensure_moe_defaults()
+        source = dict(source_settings or self.moe_settings)
+        env_id = str(source.get("env_id", self.env_id_cb.currentText()))
+        settings = dict(self.moe_settings)
+        settings.update({
+            "env_id": env_id,
+            "policy_a_path": str(source.get("policy_a_path", "")).strip(),
+            "policy_b_path": str(source.get("policy_b_path", "")).strip(),
+            "terrains": list(source.get("terrains", settings.get("terrains", []))),
+            "samples": str(source.get("samples", settings.get("samples", "200000"))).strip(),
+            "rollout_steps": str(source.get("rollout_steps", settings.get("rollout_steps", "1000"))).strip(),
+            "boundary_m": str(source.get("boundary_m", settings.get("boundary_m", "8.0"))).strip(),
+            "command_min": str(source.get("command_min", settings.get("command_min", "-1.0"))).strip(),
+            "command_max": str(source.get("command_max", settings.get("command_max", "1.0"))).strip(),
+            "seed": str(source.get("seed", settings.get("seed", "42"))).strip(),
+            "epochs": str(source.get("epochs", settings.get("epochs", "30"))).strip(),
+            "batch_size": str(source.get("batch_size", settings.get("batch_size", "256"))).strip(),
+            "learning_rate": str(source.get("learning_rate", settings.get("learning_rate", "1e-3"))).strip(),
+            "lambda_smooth": str(source.get("lambda_smooth", settings.get("lambda_smooth", "0.03"))).strip(),
+            "val_ratio": str(source.get("val_ratio", settings.get("val_ratio", "0.1"))).strip(),
+            "selected_datasets": list(source.get("selected_datasets", settings.get("selected_datasets", []))),
+        })
+        self.moe_settings = settings
+        self.moe_settings_by_env[env_id] = dict(settings)
+        return settings
+
+    def _collect_moe_manual_ui_settings(self, source_settings=None):
+        self._ensure_moe_manual_defaults()
+        source = dict(source_settings or self.moe_manual_settings)
+        env_id = self.env_id_cb.currentText()
+        settings = dict(self.moe_manual_settings)
+        settings.update({
+            "env_id": env_id,
+            "policy_a_path": str(source.get("policy_a_path", "")).strip(),
+            "policy_b_path": str(source.get("policy_b_path", "")).strip(),
+            "manual_alpha": str(source.get("manual_alpha", settings.get("manual_alpha", "0.0"))).strip(),
+            "output_path": str(source.get("output_path", settings.get("output_path", ""))).strip(),
+        })
+        self.moe_manual_settings = settings
+        self.moe_manual_settings_by_env[env_id] = dict(settings)
+        return settings
+
+    def _moe_dataset_root(self, env_id: str):
+        return os.path.join(self._repo_root(), "envs", env_id, "dataset", "moe_gate")
+
+    def _list_moe_datasets(self, env_id: str):
+        dataset_root = self._moe_dataset_root(env_id)
+        if not os.path.isdir(dataset_root):
+            return []
+        datasets = []
+        for run_name in sorted(os.listdir(dataset_root), reverse=True):
+            run_dir = os.path.join(dataset_root, run_name)
+            dataset_path = os.path.join(run_dir, "dataset.npz")
+            if not os.path.isfile(dataset_path):
+                continue
+            try:
+                with np.load(dataset_path) as payload:
+                    samples = int(payload["obs"].shape[0])
+                    obs_dim = int(payload["obs"].shape[1])
+            except Exception:
+                samples = 0
+                obs_dim = 0
+            datasets.append({
+                "path": dataset_path,
+                "label": f"{run_name} | {samples} samples | obs {obs_dim}",
+            })
+        return datasets
+
+    def _refresh_moe_dialog(self):
+        if self.moe_dialog is None:
+            return
+        self._ensure_moe_defaults()
+        settings = self.moe_settings
+        env_id = settings.get("env_id", self.env_id_cb.currentText())
+        self.moe_dialog.set_settings(settings)
+        self.moe_dialog.set_available_datasets(
+            self._list_moe_datasets(env_id),
+            settings.get("selected_datasets", []),
+        )
+        running = self.moe_thread is not None and self.moe_thread.isRunning()
+        self.moe_dialog.set_running(running)
+        if self._moe_last_summary:
+            self.moe_dialog.set_status(f"last: {self._moe_last_summary.get('samples', self._moe_last_summary.get('best_val_loss', 'done'))}")
 
     def _refresh_vision_train_dialog(self):
         if self.vision_train_dialog is None:
@@ -1451,6 +1598,35 @@ class MainWindow(QMainWindow):
         hm_row_layout.addWidget(self.vision_status_inline_label, 1)
         env_layout.addRow("Height Map:", hm_row)
 
+        # === MoE row: independent from Depth / Height Map ===
+        moe_row = QWidget()
+        moe_row_layout = QHBoxLayout(moe_row)
+        moe_row_layout.setContentsMargins(0, 0, 0, 0)
+        moe_row_layout.setSpacing(6)
+
+        self.moe_train_inline_btn = QPushButton("MoE Training")
+        self.moe_train_inline_btn.setFixedWidth(120)
+        self.moe_train_inline_btn.clicked.connect(self.open_moe_train_dialog)
+        self.moe_manual_btn = QPushButton("Manual")
+        self.moe_manual_btn.setFixedWidth(80)
+        self.moe_manual_btn.clicked.connect(self.open_moe_manual_dialog)
+
+        self.moe_status_inline_label = QLabel("")
+        self.moe_status_inline_label.setStyleSheet("color: #64748B;")
+
+        moe_row_layout.addWidget(self.moe_train_inline_btn)
+        moe_row_layout.addWidget(self.moe_manual_btn)
+        moe_row_layout.addWidget(self.moe_status_inline_label, 1)
+
+        env_layout.addRow("MoE:", moe_row)
+
+        self.terrain_id_cb = NoWheelComboBox()
+        self.terrain_id_cb.addItems([
+            'flat', 'rocky_easy', 'rocky_hard',
+            'slope_easy', 'slope_hard',
+            'stairs_up_easy', 'stairs_up_normal', 'stairs_up_hard', 'stairs_up_extrme'
+        ])
+
         self.terrain_id_cb = NoWheelComboBox()
         self.terrain_id_cb.addItems([
             'flat', 'rocky_easy', 'rocky_hard',
@@ -1663,6 +1839,17 @@ class MainWindow(QMainWindow):
         self.vision_export_btn = QPushButton("Export Predictor ONNX")
         self.vision_export_btn.clicked.connect(self.export_vision_predictor_onnx)
         vision_layout.addRow("Export:", self.vision_export_btn)
+
+        moe_tools_row = QWidget()
+        moe_tools_layout = QHBoxLayout(moe_tools_row)
+        moe_tools_layout.setContentsMargins(0, 0, 0, 0)
+        self.moe_train_btn = QPushButton("MoE Training")
+        self.moe_train_btn.clicked.connect(self.open_moe_train_dialog)
+        self.moe_manual_vision_btn = QPushButton("Manual")
+        self.moe_manual_vision_btn.clicked.connect(self.open_moe_manual_dialog)
+        moe_tools_layout.addWidget(self.moe_train_btn)
+        moe_tools_layout.addWidget(self.moe_manual_vision_btn)
+        vision_layout.addRow("MoE:", moe_tools_row)
 
         self.vision_status_label = QLabel("idle")
         self.vision_status_label.setWordWrap(True)
@@ -2091,6 +2278,7 @@ class MainWindow(QMainWindow):
             self.vision_train_dialog.trainRequested.connect(self.train_vision_predictor)
             self.vision_train_dialog.exportRequested.connect(self.export_vision_predictor_onnx)
             self.vision_train_dialog.refreshRequested.connect(self._refresh_vision_train_dialog)
+            self.vision_train_dialog.stopRequested.connect(self.stop_vision_train)
         self._refresh_vision_train_dialog()
         self.vision_train_dialog.show()
         self.vision_train_dialog.raise_()
@@ -2148,6 +2336,13 @@ class MainWindow(QMainWindow):
         if self.vision_train_dialog is not None:
             self.vision_train_dialog.append_log(message)
 
+    def stop_vision_train(self):
+        if self.vision_train_worker is not None:
+            self.vision_train_worker.request_stop()
+        if self.vision_train_dialog is not None:
+            self.vision_train_dialog.append_log("[vision-train] stop requested by user.\n")
+            self.vision_train_dialog.set_status("stopping")
+
     def on_vision_train_finished(self, summary):
         self._vision_last_summary = dict(summary or {})
         self._vision_last_summary_by_env[self.env_id_cb.currentText()] = dict(self._vision_last_summary)
@@ -2157,8 +2352,10 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Vision Train",
-            f"Training finished.\nBest val loss: {self._vision_last_summary.get('best_val_loss', 0.0):.6f}\n"
-            f"ONNX: {self._vision_last_summary.get('onnx_path', '')}",
+            "Training stopped." if self._vision_last_summary.get("stopped", False) else (
+                f"Training finished.\nBest val loss: {self._vision_last_summary.get('best_val_loss', 0.0):.6f}\n"
+                f"ONNX: {self._vision_last_summary.get('onnx_path', '')}"
+            ),
         )
 
     def on_vision_train_error(self, error_msg):
@@ -2200,6 +2397,198 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Vision Train", str(e))
             return
         QMessageBox.information(self, "Vision Train", f"Predictor ONNX exported to:\n{exported}")
+
+    def open_moe_train_dialog(self):
+        self._ensure_moe_defaults()
+        if self.moe_dialog is None:
+            self.moe_dialog = MoETrainDialog(self.env_config.keys(), self._terrain_ids(), self)
+            self.moe_dialog.collectRequested.connect(self.collect_moe_data)
+            self.moe_dialog.trainRequested.connect(self.train_moe_gate)
+            self.moe_dialog.exportRequested.connect(self.export_moe_onnx)
+            self.moe_dialog.refreshRequested.connect(self._refresh_moe_dialog)
+            self.moe_dialog.stopRequested.connect(self.stop_moe_job)
+        self._refresh_moe_dialog()
+        self.moe_dialog.show()
+        self.moe_dialog.raise_()
+        self.moe_dialog.activateWindow()
+
+    def open_moe_manual_dialog(self):
+        self._ensure_moe_manual_defaults()
+        if self.moe_manual_dialog is None:
+            self.moe_manual_dialog = MoEManualDialog(self)
+            self.moe_manual_dialog.exportRequested.connect(self.export_manual_moe_onnx)
+        self.moe_manual_dialog.set_settings(self.moe_manual_settings)
+        running = self.moe_thread is not None and self.moe_thread.isRunning()
+        self.moe_manual_dialog.set_running(running)
+        self.moe_manual_dialog.show()
+        self.moe_manual_dialog.raise_()
+        self.moe_manual_dialog.activateWindow()
+
+    def _start_moe_worker(self, mode, settings):
+        if self.moe_thread is not None and self.moe_thread.isRunning():
+            QMessageBox.warning(self, "MoE Training", "A MoE job is already running.")
+            return False
+        if self.moe_dialog is not None:
+            self.moe_dialog.set_running(True)
+        if self.moe_manual_dialog is not None:
+            self.moe_manual_dialog.set_running(True)
+        self.moe_worker_mode = mode
+        self.moe_thread = QThread()
+        self.moe_worker = MoEWorker(self._repo_root(), settings, mode)
+        self.moe_worker.moveToThread(self.moe_thread)
+        self.moe_thread.started.connect(self.moe_worker.run)
+        self.moe_worker.log.connect(self.on_moe_log)
+        self.moe_worker.finished.connect(self.on_moe_finished)
+        self.moe_worker.error.connect(self.on_moe_error)
+        self.moe_worker.finished.connect(self.moe_thread.quit)
+        self.moe_worker.error.connect(self.moe_thread.quit)
+        self.moe_worker.finished.connect(self.moe_worker.deleteLater)
+        self.moe_worker.error.connect(self.moe_worker.deleteLater)
+        self.moe_thread.finished.connect(self._on_moe_thread_finished)
+        self.moe_thread.finished.connect(self.moe_thread.deleteLater)
+        self.moe_thread.start()
+        return True
+
+    def export_manual_moe_onnx(self):
+        dialog_settings = self.moe_manual_dialog.get_settings() if self.moe_manual_dialog is not None else None
+        settings = self._collect_moe_manual_ui_settings(dialog_settings)
+        if not os.path.isfile(settings.get("policy_a_path", "")) or not os.path.isfile(settings.get("policy_b_path", "")):
+            QMessageBox.warning(self, "Manual MoE Export", "Select valid Policy A and Policy B ONNX files.")
+            return
+        alpha = to_float(settings.get("manual_alpha", 0.0), 0.0)
+        alpha = min(1.0, max(0.0, alpha))
+        output_path = settings.get("output_path", "")
+        if not output_path:
+            default_dir = os.path.join(self._repo_root(), "envs", settings.get("env_id", self.env_id_cb.currentText()), "weights", "moe_manual")
+            output_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Manual MoE ONNX",
+                os.path.join(default_dir, "manual_moe_policy.onnx"),
+                "ONNX Files (*.onnx)"
+            )
+            if not output_path:
+                return
+            settings["output_path"] = output_path
+        settings["manual_alpha"] = alpha
+        self.moe_manual_settings = dict(settings)
+        self.moe_manual_settings_by_env[settings.get("env_id", self.env_id_cb.currentText())] = dict(settings)
+        if self.moe_manual_dialog is not None:
+            self.moe_manual_dialog.set_settings(settings)
+            self.moe_manual_dialog.set_status("exporting")
+            self.moe_manual_dialog.append_log(f"[moe-manual] export requested alpha={alpha:.6f}")
+        self._start_moe_worker("manual_export", settings)
+
+    def collect_moe_data(self):
+        dialog_settings = self.moe_dialog.get_settings() if self.moe_dialog is not None else None
+        settings = self._collect_moe_ui_settings(dialog_settings)
+        if not settings.get("terrains"):
+            QMessageBox.warning(self, "MoE Training", "Select at least one terrain.")
+            return
+        if not os.path.isfile(settings.get("policy_a_path", "")) or not os.path.isfile(settings.get("policy_b_path", "")):
+            QMessageBox.warning(self, "MoE Training", "Select valid Policy A and Policy B ONNX files.")
+            return
+        if self.moe_dialog is not None:
+            self.moe_dialog.clear_log()
+            self.moe_dialog.set_status("collecting")
+        self._start_moe_worker("collect", {
+            **settings,
+            "samples": to_int(settings.get("samples", 200000), 200000),
+            "rollout_steps": to_int(settings.get("rollout_steps", 1000), 1000),
+            "boundary_m": to_float(settings.get("boundary_m", 8.0), 8.0),
+            "command_min": to_float(settings.get("command_min", -1.0), -1.0),
+            "command_max": to_float(settings.get("command_max", 1.0), 1.0),
+            "seed": to_int(settings.get("seed", 42), 42),
+        })
+
+    def train_moe_gate(self):
+        dialog_settings = self.moe_dialog.get_settings() if self.moe_dialog is not None else None
+        settings = self._collect_moe_ui_settings(dialog_settings)
+        if not settings.get("selected_datasets"):
+            QMessageBox.warning(self, "MoE Training", "Select at least one collected MoE dataset.")
+            return
+        if self.moe_dialog is not None:
+            self.moe_dialog.clear_log()
+            self.moe_dialog.set_status("training")
+        self._start_moe_worker("train", {
+            **settings,
+            "epochs": to_int(settings.get("epochs", 30), 30),
+            "batch_size": to_int(settings.get("batch_size", 256), 256),
+            "learning_rate": to_float(settings.get("learning_rate", 1e-3), 1e-3),
+            "lambda_smooth": to_float(settings.get("lambda_smooth", 0.03), 0.03),
+            "val_ratio": to_float(settings.get("val_ratio", 0.1), 0.1),
+            "seed": to_int(settings.get("seed", 42), 42),
+        })
+
+    def export_moe_onnx(self):
+        settings = self._collect_moe_ui_settings(self.moe_dialog.get_settings() if self.moe_dialog is not None else None)
+        env_id = settings.get("env_id", self.env_id_cb.currentText())
+        default_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "moe_gate", "latest")
+        checkpoint_path = os.path.join(default_dir, "moe_gate.pt")
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export MoE Policy ONNX",
+            os.path.join(default_dir, "moe_policy.onnx"),
+            "ONNX Files (*.onnx)"
+        )
+        if not output_path:
+            return
+        if self.moe_dialog is not None:
+            self.moe_dialog.set_status("exporting")
+        self._start_moe_worker("export", {
+            **settings,
+            "checkpoint_path": checkpoint_path,
+            "output_path": output_path,
+        })
+
+    def on_moe_log(self, message):
+        if self.moe_dialog is not None:
+            self.moe_dialog.append_log(message)
+        if self.moe_manual_dialog is not None:
+            self.moe_manual_dialog.append_log(message)
+
+    def stop_moe_job(self):
+        if self.moe_worker is not None:
+            self.moe_worker.request_stop()
+        if self.moe_dialog is not None:
+            self.moe_dialog.append_log("[moe] stop requested by user.\n")
+            self.moe_dialog.set_status("stopping")
+
+    def on_moe_finished(self, summary):
+        self._moe_last_summary = dict(summary or {})
+        env_id = self._moe_last_summary.get("env_id", self.moe_settings.get("env_id", self.env_id_cb.currentText()))
+        self._moe_last_summary_by_env[env_id] = dict(self._moe_last_summary)
+        if self.moe_dialog is not None:
+            self.moe_dialog.set_running(False)
+            self.moe_dialog.set_status("done")
+        if self.moe_manual_dialog is not None:
+            self.moe_manual_dialog.set_running(False)
+            if self.moe_worker_mode == "manual_export":
+                self.moe_manual_dialog.set_status(f"exported: {self._moe_last_summary.get('onnx_path', '')}")
+        self._refresh_moe_dialog()
+        if self._moe_last_summary.get("stopped", False):
+            QMessageBox.information(self, "MoE Training", "MoE job stopped.")
+        else:
+            QMessageBox.information(self, "MoE Training", "MoE job finished.")
+
+    def on_moe_error(self, error_msg):
+        if self.moe_dialog is not None:
+            self.moe_dialog.set_running(False)
+            self.moe_dialog.append_log(f"[moe] ERROR: {error_msg}\n")
+            self.moe_dialog.set_status("error")
+        if self.moe_manual_dialog is not None:
+            self.moe_manual_dialog.set_running(False)
+            self.moe_manual_dialog.append_log(f"[moe] ERROR: {error_msg}\n")
+            self.moe_manual_dialog.set_status("error")
+        QMessageBox.critical(self, "MoE Training", error_msg)
+
+    def _on_moe_thread_finished(self):
+        self.moe_thread = None
+        self.moe_worker = None
+        self.moe_worker_mode = None
+        if self.moe_dialog is not None:
+            self.moe_dialog.set_running(False)
+        if self.moe_manual_dialog is not None:
+            self.moe_manual_dialog.set_running(False)
 
     def open_hardware_settings(self):
         env_id = self.env_id_cb.currentText()
@@ -2610,4 +2999,11 @@ class MainWindow(QMainWindow):
         if self.vision_train_thread is not None and self.vision_train_thread.isRunning():
             self.vision_train_thread.quit()
             self.vision_train_thread.wait(1000)
+        if self.moe_dialog is not None and self.moe_dialog.isVisible():
+            self.moe_dialog.close()
+        if self.moe_manual_dialog is not None and self.moe_manual_dialog.isVisible():
+            self.moe_manual_dialog.close()
+        if self.moe_thread is not None and self.moe_thread.isRunning():
+            self.moe_thread.quit()
+            self.moe_thread.wait(1000)
         super().closeEvent(event)

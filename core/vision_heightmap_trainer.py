@@ -205,12 +205,13 @@ class TrainingArtifacts:
 
 
 class VisionHeightMapTrainer:
-    def __init__(self, repo_root: str, env_id: str, dataset_paths=None, settings: dict = None, log_callback=None):
+    def __init__(self, repo_root: str, env_id: str, dataset_paths=None, settings: dict = None, log_callback=None, stop_callback=None):
         self.repo_root = os.path.abspath(repo_root)
         self.env_id = str(env_id)
         self.dataset_paths = list(dataset_paths or [])
         self.settings = dict(settings or {})
         self.log_callback = log_callback
+        self.stop_callback = stop_callback
         self.device = "cpu"
 
     def _require_dependencies(self):
@@ -255,6 +256,9 @@ class VisionHeightMapTrainer:
         if callable(self.log_callback):
             self.log_callback(text)
         print(text, end="")
+
+    def _stop_requested(self):
+        return bool(callable(self.stop_callback) and self.stop_callback())
 
     def _make_output_paths(self):
         output_root = os.path.join(self.repo_root, "envs", self.env_id, "weights", "vision_heightmap")
@@ -318,10 +322,16 @@ class VisionHeightMapTrainer:
         history = []
 
         for epoch in range(epochs):
+            if self._stop_requested():
+                self._log("[vision-train] stop requested; ending after last completed epoch.")
+                break
             predictor.train()
             train_loss_total = 0.0
             train_batches = 0
             for batch in train_loader:
+                if self._stop_requested():
+                    self._log("[vision-train] stop requested during training batch.")
+                    break
                 depth_history = batch["depth_history"].to(self.device)
                 projected_gravity = batch["projected_gravity"].to(self.device)
                 target = batch["height_map"].to(self.device).unsqueeze(1)
@@ -338,11 +348,17 @@ class VisionHeightMapTrainer:
                 train_loss_total += float(loss.item())
                 train_batches += 1
 
+            if self._stop_requested():
+                break
+
             predictor.eval()
             val_loss_total = 0.0
             val_batches = 0
             with torch.no_grad():
                 for batch in val_loader:
+                    if self._stop_requested():
+                        self._log("[vision-train] stop requested during validation batch.")
+                        break
                     depth_history = batch["depth_history"].to(self.device)
                     projected_gravity = batch["projected_gravity"].to(self.device)
                     target = batch["height_map"].to(self.device).unsqueeze(1)
@@ -354,6 +370,9 @@ class VisionHeightMapTrainer:
                     val_loss_total += float(loss.item())
                     val_batches += 1
 
+            if self._stop_requested():
+                break
+
             train_loss = train_loss_total / max(1, train_batches)
             val_loss = val_loss_total / max(1, val_batches)
             history.append({"epoch": epoch + 1, "train_loss": train_loss, "val_loss": val_loss})
@@ -364,6 +383,15 @@ class VisionHeightMapTrainer:
                 best_state = {k: v.detach().cpu() for k, v in predictor.state_dict().items()}
 
         if best_state is None:
+            if self._stop_requested():
+                return {
+                    "env_id": self.env_id,
+                    "dataset_path": dataset_paths[0],
+                    "dataset_paths": dataset_paths,
+                    "samples": sample_count,
+                    "stopped": True,
+                    "history": history,
+                }
             raise RuntimeError("Vision predictor training did not produce a valid checkpoint.")
 
         predictor.load_state_dict(best_state)

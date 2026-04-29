@@ -97,6 +97,8 @@ class StateBuildWrapper(BaseEnv):
         self.env = env
         self.config = config
         self.settings_cfg = self.config.get("settings", self.config.get("observation", {}))
+        self.quiet = bool(self.config.get("env", {}).get("quiet", False))
+        self.last_obs = None
         self.id = env.id
         self.action_dim = env.action_dim
         self.sim_step = 0
@@ -316,7 +318,10 @@ class StateBuildWrapper(BaseEnv):
             need_update = (self.sim_step == 0) or (self.sim_step % update_interval == 0)
 
             if need_update or (n not in self._freq_cache):
-                val = np.asarray(obs[n], dtype=np.float32) * scale
+                if n in obs and obs[n] is not None:
+                    val = np.asarray(obs[n], dtype=np.float32) * scale
+                else:
+                    val = np.zeros((int(self.env.obs_to_dim.get(n, 0)),), dtype=np.float32)
                 self._freq_cache[n] = val
 
             parts.append(self._freq_cache[n].ravel().astype(np.float32))
@@ -376,7 +381,9 @@ class StateBuildWrapper(BaseEnv):
         self.sim_step = 0
         self._freq_cache.clear()
         init_obs, info = self.env.reset()
-        self._print_pretty_observation(init_obs, phase="reset")
+        self.last_obs = init_obs
+        if not self.quiet:
+            self._print_pretty_observation(init_obs, phase="reset")
         init_state = self._build_state(init_obs, reset=True)
         return init_state, info
 
@@ -387,7 +394,8 @@ class StateBuildWrapper(BaseEnv):
         assert self.reset_flag is True, "Call 'reset()' before calling 'step()'."
         self.sim_step += 1
         next_obs, terminated, truncated, info = self.env.step(action)
-        if (self.sim_step % self.pretty_print_interval == 0) or terminated or truncated:
+        self.last_obs = next_obs
+        if (not self.quiet) and ((self.sim_step % self.pretty_print_interval == 0) or terminated or truncated):
             self._print_pretty_observation(next_obs, phase=f"step {self.sim_step}")
         next_state = self._build_state(next_obs, reset=False)
 
@@ -398,6 +406,9 @@ class StateBuildWrapper(BaseEnv):
     def event(self, event: str, value):
         """Forward custom events to the wrapped environment."""
         return self.env.event(event, value)
+
+    def get_last_obs(self):
+        return self.last_obs
 
     def get_data(self):
         """Proxy for any data export the wrapped environment supports."""
@@ -449,6 +460,11 @@ class TimeLimitWrapper(BaseEnv):
 
     def get_data(self):
         return self.env.get_data()
+
+    def get_last_obs(self):
+        if hasattr(self.env, "get_last_obs"):
+            return self.env.get_last_obs()
+        return None
 
     def render(self):
         self.env.render()
@@ -531,6 +547,11 @@ class CommandWrapper(BaseEnv):
     
     def get_data(self):
         return self.env.get_data()
+
+    def get_last_obs(self):
+        if hasattr(self.env, "get_last_obs"):
+            return self.env.get_last_obs()
+        return None
 
     def render(self):
         self.env.render()

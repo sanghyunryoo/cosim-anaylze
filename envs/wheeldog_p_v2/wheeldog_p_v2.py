@@ -234,9 +234,20 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         projected_gravity = MathUtils.quat_to_base_vel(quat, np.array([0, 0, -1], dtype=np.double))
 
         if self.config["observation"]["height_map"] is not None:
-            height_map = self.mujoco_utils.get_height_map(
-                self.data, self.size_x, self.size_y, self.res_x, self.res_y
-            )
+            try:
+                height_map = self.mujoco_utils.get_height_map(
+                    self.data, self.size_x, self.size_y, self.res_x, self.res_y
+                )
+            except TypeError:
+                height_map = self.mujoco_utils.get_height_map(
+                    self.data,
+                    self.size_x / 2.0,
+                    self.size_x / 2.0,
+                    self.size_y / 2.0,
+                    self.size_y / 2.0,
+                    self.res_x,
+                    self.res_y,
+                )
         else:
             height_map = None
 

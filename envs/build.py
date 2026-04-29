@@ -18,26 +18,29 @@ def build_env(config):
     elif "observation" in config and "settings" not in config:
       config["settings"] = config["observation"]
 
+    render_flag = bool(config.get("env", {}).get("render", True))
+    render_mode = config.get("env", {}).get("render_mode", "human")
+
     if config["env"]['id'] == "flamingo_p_v3":
-      env = FlamingoPV3(config)
+      env = FlamingoPV3(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "flamingo_p_v3_1":
-      env = FlamingoPV31(config)
+      env = FlamingoPV31(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "flamingo_p_v3_2":
-      env = FlamingoPV32(config)
+      env = FlamingoPV32(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "flamingo_p_10dof":
-      env = FlamingoP10dof(config)
+      env = FlamingoP10dof(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "flamingo_light_p_v3":
-      env = FlamingoLightPV3(config)  
+      env = FlamingoLightPV3(config, render_flag=render_flag, render_mode=render_mode)  
     elif config["env"]['id'] == "bon_p_v1":
-      env = BonPV1(config)
+      env = BonPV1(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "wheeldog_p_v0":
-      env = WheelDogPV0(config)
+      env = WheelDogPV0(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "wheeldog_p_v2":
-      env = WheelDogPV2(config)
+      env = WheelDogPV2(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "humanoid_p_v0":
-      env = HumanoidPV0(config)
+      env = HumanoidPV0(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "humanoid_light_v1":
-      env = HumanoidLightV1(config)
+      env = HumanoidLightV1(config, render_flag=render_flag, render_mode=render_mode)
     else:
       raise NameError(f"Please select a valid environment id. Received '{config['env']['id']}'.")
     
