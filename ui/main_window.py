@@ -518,10 +518,13 @@ class MainWindow(QMainWindow):
             "command_min": "-1.0",
             "command_max": "1.0",
             "seed": "42",
+            "lambda_smooth": "0",
+            "cmd_alpha_penalty": "0",
+            "cmd_label_threshold": "0.2",
+            "cmd_label_alpha": "0",
             "epochs": "30",
             "batch_size": "256",
             "learning_rate": "1e-3",
-            "lambda_smooth": "0.03",
             "val_ratio": "0.1",
             "selected_datasets": [],
         }
@@ -567,7 +570,10 @@ class MainWindow(QMainWindow):
             "epochs": str(source.get("epochs", settings.get("epochs", "30"))).strip(),
             "batch_size": str(source.get("batch_size", settings.get("batch_size", "256"))).strip(),
             "learning_rate": str(source.get("learning_rate", settings.get("learning_rate", "1e-3"))).strip(),
-            "lambda_smooth": str(source.get("lambda_smooth", settings.get("lambda_smooth", "0.03"))).strip(),
+            "lambda_smooth": str(source.get("lambda_smooth", settings.get("lambda_smooth", "0"))).strip(),
+            "cmd_alpha_penalty": str(source.get("cmd_alpha_penalty", settings.get("cmd_alpha_penalty", "0"))).strip(),
+            "cmd_label_threshold": str(source.get("cmd_label_threshold", settings.get("cmd_label_threshold", "0.2"))).strip(),
+            "cmd_label_alpha": str(source.get("cmd_label_alpha", settings.get("cmd_label_alpha", "0"))).strip(),
             "val_ratio": str(source.get("val_ratio", settings.get("val_ratio", "0.1"))).strip(),
             "selected_datasets": list(source.get("selected_datasets", settings.get("selected_datasets", []))),
         })
@@ -2525,6 +2531,8 @@ class MainWindow(QMainWindow):
             "command_min": to_float(settings.get("command_min", -1.0), -1.0),
             "command_max": to_float(settings.get("command_max", 1.0), 1.0),
             "seed": to_int(settings.get("seed", 42), 42),
+            "cmd_label_threshold": to_float(settings.get("cmd_label_threshold", 0.2), 0.2),
+            "cmd_label_alpha": to_float(settings.get("cmd_label_alpha", 0.0), 0.0),
         })
 
     def train_moe_gate(self):
@@ -2541,7 +2549,10 @@ class MainWindow(QMainWindow):
             "epochs": to_int(settings.get("epochs", 30), 30),
             "batch_size": to_int(settings.get("batch_size", 256), 256),
             "learning_rate": to_float(settings.get("learning_rate", 1e-3), 1e-3),
-            "lambda_smooth": to_float(settings.get("lambda_smooth", 0.03), 0.03),
+            "lambda_smooth": to_float(settings.get("lambda_smooth", 0.0), 0.0),
+            "cmd_alpha_penalty": to_float(settings.get("cmd_alpha_penalty", 0.0), 0.0),
+            "cmd_label_threshold": to_float(settings.get("cmd_label_threshold", 0.2), 0.2),
+            "cmd_label_alpha": to_float(settings.get("cmd_label_alpha", 0.0), 0.0),
             "val_ratio": to_float(settings.get("val_ratio", 0.1), 0.1),
             "seed": to_int(settings.get("seed", 42), 42),
         })

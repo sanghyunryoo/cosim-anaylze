@@ -73,12 +73,28 @@ class MoETrainDialog(QDialog):
         self.command_min_le = QLineEdit("-1.0")
         self.command_max_le = QLineEdit("1.0")
         self.seed_le = QLineEdit("42")
+        self.lambda_smooth_le = QLineEdit("0")
+        self.cmd_alpha_penalty_le = QLineEdit("0")
+        self.cmd_label_threshold_le = QLineEdit("0.2")
+        self.cmd_label_alpha_le = QLineEdit("0")
         setup_layout.addRow("Samples:", self.samples_le)
         setup_layout.addRow("Steps/reset:", self.rollout_steps_le)
         setup_layout.addRow("Boundary m:", self.boundary_le)
         setup_layout.addRow("Cmd min:", self.command_min_le)
         setup_layout.addRow("Cmd max:", self.command_max_le)
         setup_layout.addRow("Seed:", self.seed_le)
+        setup_layout.addRow("Smoothness:", self.lambda_smooth_le)
+        setup_layout.addRow("Cmd Alpha Penalty:", self.cmd_alpha_penalty_le)
+        setup_layout.addRow("Cmd Label Thresh:", self.cmd_label_threshold_le)
+        setup_layout.addRow("Cmd Flat Alpha:", self.cmd_label_alpha_le)
+        penalty_hint = QLabel("Flat labels only: keeps alpha low when command[1]/command[2] are nonzero.")
+        penalty_hint.setWordWrap(True)
+        penalty_hint.setStyleSheet("color: #64748B;")
+        setup_layout.addRow("", penalty_hint)
+        label_hint = QLabel("If flat and |cmd[1]| or |cmd[2]| exceeds threshold, alpha_label is capped to Cmd Flat Alpha.")
+        label_hint.setWordWrap(True)
+        label_hint.setStyleSheet("color: #64748B;")
+        setup_layout.addRow("", label_hint)
 
         terrain_group = QGroupBox("Terrains")
         terrain_layout = QVBoxLayout(terrain_group)
@@ -103,12 +119,10 @@ class MoETrainDialog(QDialog):
         self.epochs_le = QLineEdit("30")
         self.batch_size_le = QLineEdit("256")
         self.lr_le = QLineEdit("1e-3")
-        self.lambda_smooth_le = QLineEdit("0.03")
         self.val_ratio_le = QLineEdit("0.1")
         data_layout.addRow("Epochs:", self.epochs_le)
         data_layout.addRow("Batch size:", self.batch_size_le)
         data_layout.addRow("Learning rate:", self.lr_le)
-        data_layout.addRow("Smooth lambda:", self.lambda_smooth_le)
         data_layout.addRow("Val ratio:", self.val_ratio_le)
 
         self.status_label = QLabel("idle")
@@ -202,6 +216,9 @@ class MoETrainDialog(QDialog):
             "batch_size": self.batch_size_le.text().strip(),
             "learning_rate": self.lr_le.text().strip(),
             "lambda_smooth": self.lambda_smooth_le.text().strip(),
+            "cmd_alpha_penalty": self.cmd_alpha_penalty_le.text().strip(),
+            "cmd_label_threshold": self.cmd_label_threshold_le.text().strip(),
+            "cmd_label_alpha": self.cmd_label_alpha_le.text().strip(),
             "val_ratio": self.val_ratio_le.text().strip(),
             "selected_datasets": self.get_selected_dataset_paths(),
         }
@@ -221,7 +238,10 @@ class MoETrainDialog(QDialog):
         self.epochs_le.setText(str(settings.get("epochs", "30")))
         self.batch_size_le.setText(str(settings.get("batch_size", "256")))
         self.lr_le.setText(str(settings.get("learning_rate", "1e-3")))
-        self.lambda_smooth_le.setText(str(settings.get("lambda_smooth", "0.03")))
+        self.lambda_smooth_le.setText(str(settings.get("lambda_smooth", "0")))
+        self.cmd_alpha_penalty_le.setText(str(settings.get("cmd_alpha_penalty", "0")))
+        self.cmd_label_threshold_le.setText(str(settings.get("cmd_label_threshold", "0.2")))
+        self.cmd_label_alpha_le.setText(str(settings.get("cmd_label_alpha", "0")))
         self.val_ratio_le.setText(str(settings.get("val_ratio", "0.1")))
         terrain_set = set(settings.get("terrains", []))
         if terrain_set:

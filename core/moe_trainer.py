@@ -39,6 +39,32 @@ class GateNet(nn.Module):
         return self.net(x)
 
 
+class ObsSubsetGate(nn.Module):
+    def __init__(self, gate, indices, command_dim=0, command_scales=None):
+        super().__init__()
+        self.gate = gate
+        self.register_buffer("indices", torch.as_tensor(indices, dtype=torch.long))
+        self.command_dim = int(command_dim)
+        if command_scales is None:
+            command_scales = []
+        self.register_buffer("command_scales", torch.as_tensor(command_scales, dtype=torch.float32))
+
+    def forward(self, obs):
+        gate_obs = torch.index_select(obs, dim=-1, index=self.indices)
+        if self.command_dim > 0 and self.command_scales.numel() >= self.command_dim:
+            command_start = obs.shape[-1] - self.command_dim
+            command_offsets = self.indices - command_start
+            scale = torch.ones_like(gate_obs)
+            for i in range(self.command_dim):
+                scale = torch.where(
+                    command_offsets.view(1, -1) == i,
+                    torch.abs(self.command_scales[i]).clamp_min(1e-6),
+                    scale,
+                )
+            gate_obs = gate_obs / scale
+        return self.gate(gate_obs)
+
+
 class MoEPolicy(nn.Module):
     def __init__(self, policy_a, policy_b, gate):
         super().__init__()
@@ -72,6 +98,7 @@ class MoEGateDataset(Dataset):
                 obs_parts.append(payload["obs"].astype(np.float32))
         self.obs = np.concatenate(obs_parts, axis=0)
         self.alpha = np.concatenate(alpha_parts, axis=0)
+        self.gate_obs = self.obs
 
     def __len__(self):
         return int(self.obs.shape[0])
@@ -79,6 +106,7 @@ class MoEGateDataset(Dataset):
     def __getitem__(self, index):
         return {
             "obs": torch.from_numpy(self.obs[index]),
+            "gate_obs": torch.from_numpy(self.gate_obs[index]),
             "alpha": torch.from_numpy(self.alpha[index]),
         }
 
@@ -301,6 +329,111 @@ class MoETrainer:
             summary_path=os.path.join(run_dir, "train_summary.json"),
         )
 
+    def _obs_dim_map(self, settings_cfg, action_dim):
+        height_cfg = settings_cfg.get("height_map", {}) if isinstance(settings_cfg.get("height_map", {}), dict) else {}
+        dof_pos_dim = int(action_dim)
+        dof_vel_dim = int(action_dim)
+        env_id = str(self.env_id)
+        if env_id.startswith("wheeldog") or env_id.startswith("bon"):
+            dof_pos_dim = 12
+            dof_vel_dim = int(action_dim)
+        elif env_id.startswith("flamingo_light"):
+            dof_pos_dim = 2
+            dof_vel_dim = int(action_dim)
+        elif env_id.startswith("flamingo"):
+            dof_pos_dim = 6
+            dof_vel_dim = int(action_dim)
+        return {
+            "dof_pos": dof_pos_dim,
+            "dof_vel": dof_vel_dim,
+            "last_action": int(action_dim),
+            "ang_vel": 3,
+            "projected_gravity": 3,
+            "lin_vel_x": 1,
+            "lin_vel_y": 1,
+            "lin_vel_z": 1,
+            "height_map": int(height_cfg.get("res_x", 0) or 0) * int(height_cfg.get("res_y", 0) or 0),
+        }
+
+    def _gate_feature_names(self):
+        names = self.settings.get("gate_feature_names", None)
+        if names:
+            return [str(name) for name in names]
+        return ["dof_pos", "dof_vel", "projected_gravity", "command_1", "command_2"]
+
+    def _command_dim(self):
+        env_table = self._load_yaml("config/env_table.yaml")
+        env_cfg = dict(env_table[self.env_id])
+        settings_cfg = self._make_settings_cfg(env_cfg)
+        return int(settings_cfg.get("command_dim", 0) or 0)
+
+    def _command_scales(self, command_dim):
+        env_table = self._load_yaml("config/env_table.yaml")
+        env_cfg = dict(env_table[self.env_id])
+        settings_cfg = self._make_settings_cfg(env_cfg)
+        raw_scales = settings_cfg.get("command_scales", {}) or {}
+        scales = []
+        for i in range(int(command_dim)):
+            value = float(raw_scales.get(str(i), raw_scales.get(i, 1.0)) or 1.0)
+            scales.append(max(abs(value), 1e-6))
+        return np.asarray(scales, dtype=np.float32)
+
+    def _gate_input_indices(self, obs_dim):
+        env_table = self._load_yaml("config/env_table.yaml")
+        env_cfg = dict(env_table[self.env_id])
+        settings_cfg = self._make_settings_cfg(env_cfg)
+        action_dim = len(env_cfg.get("action_scales", []) or [])
+        dims = self._obs_dim_map(settings_cfg, action_dim)
+        selected = set(self._gate_feature_names())
+        indices = []
+        offset = 0
+
+        for _ in range(int(settings_cfg.get("stack_size", 1))):
+            for name in settings_cfg.get("stacked_obs_order", []):
+                dim = int(dims.get(name, 0))
+                if dim <= 0:
+                    continue
+                if name in selected:
+                    indices.extend(range(offset, offset + dim))
+                offset += dim
+
+        for name in settings_cfg.get("non_stacked_obs_order", []):
+            dim = int(dims.get(name, 0))
+            if dim <= 0:
+                continue
+            if name in selected:
+                indices.extend(range(offset, offset + dim))
+            offset += dim
+
+        command_dim = int(settings_cfg.get("command_dim", 0) or 0)
+        expected_obs_dim = offset + command_dim
+        command_start = offset
+        for command_index in range(command_dim):
+            if f"command_{command_index}" in selected or "command" in selected:
+                indices.append(command_start + command_index)
+        if not indices:
+            raise RuntimeError("Gate feature selection produced no input indices.")
+        if expected_obs_dim != int(obs_dim):
+            non_command_dim = max(1, int(obs_dim) - max(0, command_dim))
+            self._log(
+                f"[moe-train] warning: obs layout mismatch expected={expected_obs_dim} actual={obs_dim}; "
+                "falling back to non-command obs features."
+            )
+            indices = list(range(non_command_dim))
+        return np.asarray(indices, dtype=np.int64)
+
+    def _make_gate_obs(self, obs, gate_indices, command_dim, command_scales):
+        gate_obs = np.asarray(obs, dtype=np.float32)[:, gate_indices].copy()
+        if command_dim <= 0:
+            return gate_obs
+        command_scales = np.asarray(command_scales, dtype=np.float32).reshape(-1)
+        command_start = int(obs.shape[1]) - int(command_dim)
+        for gate_col, obs_index in enumerate(gate_indices):
+            command_index = int(obs_index) - command_start
+            if 0 <= command_index < command_dim and command_index < command_scales.size:
+                gate_obs[:, gate_col] = gate_obs[:, gate_col] / max(abs(float(command_scales[command_index])), 1e-6)
+        return gate_obs.astype(np.float32)
+
     @staticmethod
     def _prefixed_name(name, prefix, external_map):
         if not name:
@@ -497,6 +630,45 @@ class MoETrainer:
         score = 10.0 * roughness + 6.0 * height_range + 2.0 * stairs_flag - 3.0
         return float(self._sigmoid(score))
 
+    def _cmd_label_settings(self):
+        threshold = max(0.0, float(self.settings.get("cmd_label_threshold", 0.2)))
+        alpha = min(1.0, max(0.0, float(self.settings.get("cmd_label_alpha", 0.0))))
+        flat_threshold = min(1.0, max(0.0, float(self.settings.get("cmd_label_flat_threshold", 0.15))))
+        return threshold, alpha, flat_threshold
+
+    def _adjust_alpha_label_for_flat_command(self, alpha_label, command, command_scales):
+        threshold, alpha_cap, flat_threshold = self._cmd_label_settings()
+        if threshold <= 0.0:
+            threshold = 0.0
+        if float(alpha_label) >= flat_threshold:
+            return float(alpha_label)
+        command = np.asarray(command, dtype=np.float32).reshape(-1)
+        command_scales = np.asarray(command_scales, dtype=np.float32).reshape(-1)
+        if command.size < 3 or command_scales.size < 3:
+            return float(alpha_label)
+        command_unit = command[: command_scales.size] / np.maximum(np.abs(command_scales), 1e-6)
+        cmd_motion = max(abs(float(command_unit[1])), abs(float(command_unit[2])))
+        if cmd_motion >= threshold:
+            return min(float(alpha_label), float(alpha_cap))
+        return float(alpha_label)
+
+    def _adjust_dataset_labels_for_flat_command(self, obs, alpha, command_dim, command_scales):
+        threshold, alpha_cap, flat_threshold = self._cmd_label_settings()
+        if command_dim < 3 or obs.shape[1] < command_dim:
+            return alpha, 0
+        command = obs[:, -command_dim:].astype(np.float32)
+        command_scales = np.asarray(command_scales, dtype=np.float32).reshape(1, -1)
+        if command_scales.shape[1] < 3:
+            return alpha, 0
+        command_unit = command / np.maximum(np.abs(command_scales), 1e-6)
+        cmd_motion = np.maximum(np.abs(command_unit[:, 1]), np.abs(command_unit[:, 2])).reshape(-1, 1)
+        mask = (alpha < flat_threshold) & (cmd_motion >= threshold)
+        if not np.any(mask):
+            return alpha, 0
+        adjusted = alpha.copy()
+        adjusted[mask] = np.minimum(adjusted[mask], float(alpha_cap))
+        return adjusted, int(np.count_nonzero(mask))
+
     def _sample_command(self, rng, command_dim):
         lo = float(self.settings.get("command_min", -1.0))
         hi = float(self.settings.get("command_max", 1.0))
@@ -555,6 +727,7 @@ class MoETrainer:
             self._log(f"[moe-collect] terrain={terrain} target={per_terrain_target}")
             config = self._base_config(terrain)
             env = build_env(config)
+            command_scales = self._command_scales(env.command_dim)
             collected = 0
             try:
                 state, _ = env.reset()
@@ -570,6 +743,11 @@ class MoETrainer:
                         break
                     last_obs = env.get_last_obs() or {}
                     alpha_label = self._alpha_label_from_height(last_obs.get("height_map", []), terrain)
+                    alpha_label = self._adjust_alpha_label_for_flat_command(
+                        alpha_label,
+                        getattr(env, "applied_command", command),
+                        command_scales,
+                    )
 
                     action_a = policy_a.get_action(state)
                     action_b = policy_b.get_action(state)
@@ -632,6 +810,9 @@ class MoETrainer:
             "policy_a_path": policy_a_path,
             "policy_b_path": policy_b_path,
             "gate_input": "obs; privileged height_map is used only to create alpha_label during collection",
+            "cmd_label_threshold": self._cmd_label_settings()[0],
+            "cmd_label_alpha": self._cmd_label_settings()[1],
+            "cmd_label_rule": "If alpha_label is flat and max(|command[1]|, |command[2]|) exceeds threshold, cap alpha_label.",
             "dataset_path": dataset_path,
             "stopped": self._stop_requested(),
         }
@@ -648,9 +829,30 @@ class MoETrainer:
         dataset = MoEGateDataset(dataset_paths)
         if len(dataset) < 2:
             raise RuntimeError("At least 2 MoE samples are required to train the gate.")
-        self._log(f"[moe-train] loaded samples={len(dataset)} obs_dim={dataset.obs.shape[1]} gate_input=obs")
+        gate_indices = self._gate_input_indices(dataset.obs.shape[1])
+        gate_feature_names = self._gate_feature_names()
+        command_dim = self._command_dim()
+        command_scales = self._command_scales(command_dim) if command_dim > 0 else np.ones((0,), dtype=np.float32)
+        adjusted_alpha, adjusted_count = self._adjust_dataset_labels_for_flat_command(
+            dataset.obs,
+            dataset.alpha,
+            command_dim,
+            command_scales,
+        )
+        dataset.alpha = adjusted_alpha
+        dataset.gate_obs = self._make_gate_obs(dataset.obs, gate_indices, command_dim, command_scales)
+        lambda_cmd_alpha = max(0.0, float(self.settings.get("cmd_alpha_penalty", 0.0)))
+        cmd_label_threshold, cmd_label_alpha, cmd_label_flat_threshold = self._cmd_label_settings()
+        self._log(
+            f"[moe-train] loaded samples={len(dataset)} obs_dim={dataset.obs.shape[1]} "
+            f"gate_dim={len(gate_indices)} gate_features={gate_feature_names} "
+            f"smoothness={float(self.settings.get('lambda_smooth', 0.0))} "
+            f"cmd_alpha_penalty={lambda_cmd_alpha} command_scales={command_scales.tolist()} "
+            f"cmd_label_threshold={cmd_label_threshold} cmd_label_alpha={cmd_label_alpha} "
+            f"cmd_label_adjusted={adjusted_count}"
+        )
 
-        val_ratio = min(0.4, max(0.01, float(self.settings.get("val_ratio", 0.1))))
+        val_ratio = min(0.4, max(0.01, float(self.settings.get("val_ratio", 0.15))))
         val_count = max(1, int(len(dataset) * val_ratio))
         train_count = max(1, len(dataset) - val_count)
         generator = torch.Generator().manual_seed(int(self.settings.get("seed", 42)))
@@ -658,12 +860,14 @@ class MoETrainer:
         batch_size = max(1, int(self.settings.get("batch_size", 256)))
         train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
+        gate_indices_tensor = torch.as_tensor(gate_indices, dtype=torch.long)
+        command_scales_tensor = torch.as_tensor(command_scales, dtype=torch.float32)
 
-        gate = GateNet(int(dataset.obs.shape[1]))
-        optimizer = torch.optim.Adam(gate.parameters(), lr=float(self.settings.get("learning_rate", 1e-3)))
+        gate = GateNet(int(len(gate_indices)))
+        optimizer = torch.optim.Adam(gate.parameters(), lr=float(self.settings.get("learning_rate", 3e-4)))
         mse = nn.MSELoss()
-        lambda_smooth = float(self.settings.get("lambda_smooth", 0.03))
-        epochs = max(1, int(self.settings.get("epochs", 30)))
+        lambda_smooth = max(0.0, float(self.settings.get("lambda_smooth", 0.0)))
+        epochs = max(1, int(self.settings.get("epochs", 50)))
         best_val = None
         best_state = None
         history = []
@@ -679,11 +883,22 @@ class MoETrainer:
                 if self._stop_requested():
                     self._log("[moe-train] stop requested during training batch.")
                     break
-                pred = gate(batch["obs"].float())
+                obs = batch["obs"].float()
+                gate_obs = batch["gate_obs"].float()
+                pred = gate(gate_obs)
                 target = batch["alpha"].float()
                 loss = mse(pred, target)
-                if pred.shape[0] > 1:
+                if lambda_smooth > 0.0 and pred.shape[0] > 1:
                     loss = loss + lambda_smooth * torch.mean((pred[1:] - pred[:-1]) ** 2)
+                if lambda_cmd_alpha > 0.0 and command_dim >= 3 and obs.shape[-1] >= command_dim:
+                    command = obs[:, -command_dim:]
+                    command_unit = command / command_scales_tensor
+                    cmd_motion = torch.abs(command_unit[:, 1:3]).sum(dim=1, keepdim=True)
+                    flat_mask = (target < 0.15).float()
+                    weights = flat_mask * cmd_motion
+                    denom = torch.clamp(weights.sum(), min=1e-6)
+                    cmd_loss = torch.sum(weights * (pred ** 2)) / denom
+                    loss = loss + lambda_cmd_alpha * cmd_loss
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -701,7 +916,8 @@ class MoETrainer:
                     if self._stop_requested():
                         self._log("[moe-train] stop requested during validation batch.")
                         break
-                    pred = gate(batch["obs"].float())
+                    gate_obs = batch["gate_obs"].float()
+                    pred = gate(gate_obs)
                     loss = mse(pred, batch["alpha"].float())
                     val_loss_total += float(loss.item())
                     val_batches += 1
@@ -728,8 +944,20 @@ class MoETrainer:
         artifacts = self._make_artifacts("latest")
         checkpoint = {
             "state_dict": gate.state_dict(),
-            "gate_obs_dim": int(dataset.obs.shape[1]),
+            "gate_obs_dim": int(len(gate_indices)),
             "obs_dim": int(dataset.obs.shape[1]),
+            "gate_input_indices": gate_indices.astype(int).tolist(),
+            "gate_feature_names": gate_feature_names,
+            "gate_command_dim": int(command_dim),
+            "gate_command_scales": command_scales.astype(float).tolist(),
+            "lambda_smooth": float(lambda_smooth),
+            "cmd_alpha_penalty": float(lambda_cmd_alpha),
+            "cmd_alpha_penalty_note": "Applied only when alpha_label < 0.15; penalizes alpha for nonzero command[1]/command[2].",
+            "cmd_alpha_penalty_uses_unscaled_command": True,
+            "cmd_label_threshold": float(cmd_label_threshold),
+            "cmd_label_alpha": float(cmd_label_alpha),
+            "cmd_label_flat_threshold": float(cmd_label_flat_threshold),
+            "cmd_label_adjusted_count": int(adjusted_count),
             "history": history,
             "dataset_paths": dataset_paths,
             "policy_a_path": self.settings.get("policy_a_path", ""),
@@ -745,6 +973,9 @@ class MoETrainer:
             "alpha_onnx_path": artifacts.alpha_onnx_path,
             "moe_onnx_path": os.path.join(artifacts.run_dir, "moe_policy.onnx"),
             "manifest_path": artifacts.manifest_path,
+            "gate_feature_names": gate_feature_names,
+            "gate_dim": int(len(gate_indices)),
+            "cmd_alpha_penalty": float(lambda_cmd_alpha),
             "history": history,
             "stopped": self._stop_requested(),
         }
@@ -756,21 +987,31 @@ class MoETrainer:
     def export_onnx_from_checkpoint(self, checkpoint_path, output_path):
         self._require_torch()
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        if int(checkpoint.get("gate_obs_dim", -1)) != int(checkpoint.get("obs_dim", -2)):
-            raise RuntimeError(
-                "This MoE checkpoint was trained with a separate gate_obs input. "
-                "Retrain the gate with the current code so the gate uses the same obs input as the experts."
-            )
         gate = GateNet(int(checkpoint["gate_obs_dim"]))
         gate.load_state_dict(checkpoint["state_dict"])
         gate.eval()
-        dummy = torch.zeros((1, int(checkpoint["gate_obs_dim"])), dtype=torch.float32)
+        obs_dim = int(checkpoint.get("obs_dim", checkpoint["gate_obs_dim"]))
+        gate_indices = checkpoint.get("gate_input_indices", None)
+        if gate_indices is None:
+            if int(checkpoint["gate_obs_dim"]) != obs_dim:
+                raise RuntimeError(
+                    "This MoE checkpoint does not contain gate input indices. Retrain the gate with the current code."
+                )
+            gate_indices = list(range(obs_dim))
+        gate_for_export = ObsSubsetGate(
+            gate,
+            gate_indices,
+            command_dim=int(checkpoint.get("gate_command_dim", 0)),
+            command_scales=checkpoint.get("gate_command_scales", []),
+        )
+        gate_for_export.eval()
+        dummy = torch.zeros((1, obs_dim), dtype=torch.float32)
         artifacts = self._make_artifacts("latest")
         gate_onnx_path = artifacts.gate_onnx_path
         if os.path.abspath(gate_onnx_path) == os.path.abspath(output_path):
             gate_onnx_path = os.path.join(artifacts.run_dir, "moe_gate_internal.onnx")
         torch.onnx.export(
-            gate,
+            gate_for_export,
             dummy,
             gate_onnx_path,
             input_names=["obs"],
@@ -790,6 +1031,10 @@ class MoETrainer:
             "alpha_onnx_path": artifacts.alpha_onnx_path,
             "moe_onnx_path": fused_path,
             "formula": "action = (1 - alpha) * policy_A(obs) + alpha * policy_B(obs)",
+            "gate_feature_names": checkpoint.get("gate_feature_names", ["full_obs"]),
+            "gate_input_indices": list(gate_indices),
+            "gate_command_dim": int(checkpoint.get("gate_command_dim", 0)),
+            "gate_command_scales": checkpoint.get("gate_command_scales", []),
             "onnx_inputs": ["obs"],
             "onnx_outputs": ["action"],
         }
