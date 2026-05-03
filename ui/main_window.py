@@ -519,7 +519,6 @@ class MainWindow(QMainWindow):
             "command_max": "1.0",
             "seed": "42",
             "lambda_smooth": "0",
-            "cmd_alpha_penalty": "0",
             "cmd_label_threshold": "0.2",
             "cmd_label_alpha": "0",
             "epochs": "30",
@@ -535,7 +534,6 @@ class MainWindow(QMainWindow):
             "env_id": env_id,
             "policy_a_path": "",
             "policy_b_path": "",
-            "manual_alpha": "0.0",
             "output_path": os.path.join(output_dir, "manual_moe_policy.onnx"),
         }
 
@@ -571,7 +569,6 @@ class MainWindow(QMainWindow):
             "batch_size": str(source.get("batch_size", settings.get("batch_size", "256"))).strip(),
             "learning_rate": str(source.get("learning_rate", settings.get("learning_rate", "1e-3"))).strip(),
             "lambda_smooth": str(source.get("lambda_smooth", settings.get("lambda_smooth", "0"))).strip(),
-            "cmd_alpha_penalty": str(source.get("cmd_alpha_penalty", settings.get("cmd_alpha_penalty", "0"))).strip(),
             "cmd_label_threshold": str(source.get("cmd_label_threshold", settings.get("cmd_label_threshold", "0.2"))).strip(),
             "cmd_label_alpha": str(source.get("cmd_label_alpha", settings.get("cmd_label_alpha", "0"))).strip(),
             "val_ratio": str(source.get("val_ratio", settings.get("val_ratio", "0.1"))).strip(),
@@ -590,7 +587,6 @@ class MainWindow(QMainWindow):
             "env_id": env_id,
             "policy_a_path": str(source.get("policy_a_path", "")).strip(),
             "policy_b_path": str(source.get("policy_b_path", "")).strip(),
-            "manual_alpha": str(source.get("manual_alpha", settings.get("manual_alpha", "0.0"))).strip(),
             "output_path": str(source.get("output_path", settings.get("output_path", ""))).strip(),
         })
         self.moe_manual_settings = settings
@@ -2488,8 +2484,6 @@ class MainWindow(QMainWindow):
         if not os.path.isfile(settings.get("policy_a_path", "")) or not os.path.isfile(settings.get("policy_b_path", "")):
             QMessageBox.warning(self, "Manual MoE Export", "Select valid Policy A and Policy B ONNX files.")
             return
-        alpha = to_float(settings.get("manual_alpha", 0.0), 0.0)
-        alpha = min(1.0, max(0.0, alpha))
         output_path = settings.get("output_path", "")
         if not output_path:
             default_dir = os.path.join(self._repo_root(), "envs", settings.get("env_id", self.env_id_cb.currentText()), "weights", "moe_manual")
@@ -2502,13 +2496,12 @@ class MainWindow(QMainWindow):
             if not output_path:
                 return
             settings["output_path"] = output_path
-        settings["manual_alpha"] = alpha
         self.moe_manual_settings = dict(settings)
         self.moe_manual_settings_by_env[settings.get("env_id", self.env_id_cb.currentText())] = dict(settings)
         if self.moe_manual_dialog is not None:
             self.moe_manual_dialog.set_settings(settings)
             self.moe_manual_dialog.set_status("exporting")
-            self.moe_manual_dialog.append_log(f"[moe-manual] export requested alpha={alpha:.6f}")
+            self.moe_manual_dialog.append_log("[moe-manual] export requested with alpha mapped to the final command")
         self._start_moe_worker("manual_export", settings)
 
     def collect_moe_data(self):
@@ -2550,7 +2543,6 @@ class MainWindow(QMainWindow):
             "batch_size": to_int(settings.get("batch_size", 256), 256),
             "learning_rate": to_float(settings.get("learning_rate", 1e-3), 1e-3),
             "lambda_smooth": to_float(settings.get("lambda_smooth", 0.0), 0.0),
-            "cmd_alpha_penalty": to_float(settings.get("cmd_alpha_penalty", 0.0), 0.0),
             "cmd_label_threshold": to_float(settings.get("cmd_label_threshold", 0.2), 0.2),
             "cmd_label_alpha": to_float(settings.get("cmd_label_alpha", 0.0), 0.0),
             "val_ratio": to_float(settings.get("val_ratio", 0.1), 0.1),

@@ -27,7 +27,7 @@ class MoEManualDialog(QDialog):
 
         layout = QVBoxLayout(self)
         formula_label = QLabel(
-            "Formula: action = (1 - alpha) * Policy A(obs) + alpha * Policy B(obs)    |    alpha = fixed manual value"
+            "Formula: alpha = last command in obs, clipped to 0..1; action = (1 - alpha) * Policy A(obs[:-1]) + alpha * Policy B(obs[:-1])"
         )
         formula_label.setWordWrap(True)
         formula_label.setStyleSheet("font-weight: 600; color: #1f2937;")
@@ -38,12 +38,10 @@ class MoEManualDialog(QDialog):
 
         self.policy_a_le = QLineEdit()
         self.policy_b_le = QLineEdit()
-        self.alpha_le = QLineEdit("0.0")
         self.output_le = QLineEdit()
 
         form.addRow("Policy A:", self._file_row(self.policy_a_le, save=False))
         form.addRow("Policy B:", self._file_row(self.policy_b_le, save=False))
-        form.addRow("Alpha:", self.alpha_le)
         form.addRow("Output:", self._file_row(self.output_le, save=True))
 
         self.status_label = QLabel("idle")
@@ -91,7 +89,6 @@ class MoEManualDialog(QDialog):
         return {
             "policy_a_path": self.policy_a_le.text().strip(),
             "policy_b_path": self.policy_b_le.text().strip(),
-            "manual_alpha": self.alpha_le.text().strip(),
             "output_path": self.output_le.text().strip(),
         }
 
@@ -99,7 +96,6 @@ class MoEManualDialog(QDialog):
         settings = dict(settings or {})
         self.policy_a_le.setText(str(settings.get("policy_a_path", "")))
         self.policy_b_le.setText(str(settings.get("policy_b_path", "")))
-        self.alpha_le.setText(str(settings.get("manual_alpha", "0.0")))
         self.output_le.setText(str(settings.get("output_path", "")))
 
     def set_status(self, text):

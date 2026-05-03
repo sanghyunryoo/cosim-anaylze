@@ -479,6 +479,30 @@ class MoETrainer:
         copied.name = name
         return copied
 
+    @staticmethod
+    def _value_info_rank_and_last_dim(value_info):
+        tensor_type = value_info.type.tensor_type
+        if not tensor_type.HasField("shape"):
+            raise RuntimeError(f"ONNX input '{value_info.name}' has no static shape.")
+        dims = tensor_type.shape.dim
+        if not dims:
+            raise RuntimeError(f"ONNX input '{value_info.name}' has no dimensions.")
+        last = dims[-1]
+        if not last.HasField("dim_value") or int(last.dim_value) <= 0:
+            raise RuntimeError(
+                f"Manual MoE command-alpha export requires a static last input dimension; "
+                f"input '{value_info.name}' has shape {dims}."
+            )
+        return len(dims), int(last.dim_value)
+
+    @staticmethod
+    def _extended_last_dim_value_info(value_info, name, extra_dim):
+        copied = copy.deepcopy(value_info)
+        copied.name = name
+        dims = copied.type.tensor_type.shape.dim
+        dims[-1].dim_value = int(dims[-1].dim_value) + int(extra_dim)
+        return copied
+
     def export_fused_moe_onnx(self, policy_a_path, policy_b_path, gate_onnx_path, output_path):
         try:
             import onnx
@@ -554,20 +578,55 @@ class MoETrainer:
         if not os.path.isfile(policy_b_path):
             raise RuntimeError(f"Policy B ONNX not found: {policy_b_path}")
 
-        alpha_value = min(1.0, max(0.0, float(alpha)))
         policy_a = onnx.load(policy_a_path)
         policy_b = onnx.load(policy_b_path)
 
         nodes = []
         initializers = []
-        a_out, obs_info, action_info = self._append_prefixed_graph(nodes, initializers, policy_a, "policy_a/", "obs")
-        b_out, _, _ = self._append_prefixed_graph(nodes, initializers, policy_b, "policy_b/", "obs")
+        a_out, obs_info, action_info = self._append_prefixed_graph(
+            nodes,
+            initializers,
+            policy_a,
+            "policy_a/",
+            "moe/expert_obs",
+        )
+        b_out, _, _ = self._append_prefixed_graph(nodes, initializers, policy_b, "policy_b/", "moe/expert_obs")
+        obs_rank, expert_obs_dim = self._value_info_rank_and_last_dim(obs_info)
+        manual_obs_info = self._extended_last_dim_value_info(obs_info, "obs", 1)
+        slice_axis = obs_rank - 1
 
         initializers.extend([
-            helper.make_tensor("moe/manual_alpha", TensorProto.FLOAT, [1], [alpha_value]),
-            helper.make_tensor("moe/manual_one_minus_alpha", TensorProto.FLOAT, [1], [1.0 - alpha_value]),
+            helper.make_tensor("moe/expert_obs_starts", TensorProto.INT64, [1], [0]),
+            helper.make_tensor("moe/expert_obs_ends", TensorProto.INT64, [1], [expert_obs_dim]),
+            helper.make_tensor("moe/manual_alpha_starts", TensorProto.INT64, [1], [expert_obs_dim]),
+            helper.make_tensor("moe/manual_alpha_ends", TensorProto.INT64, [1], [expert_obs_dim + 1]),
+            helper.make_tensor("moe/manual_slice_axes", TensorProto.INT64, [1], [slice_axis]),
+            helper.make_tensor("moe/alpha_min", TensorProto.FLOAT, [1], [0.0]),
+            helper.make_tensor("moe/alpha_max", TensorProto.FLOAT, [1], [1.0]),
+            helper.make_tensor("moe/one_const", TensorProto.FLOAT, [1], [1.0]),
         ])
+        nodes[0:0] = [
+            helper.make_node(
+                "Slice",
+                ["obs", "moe/expert_obs_starts", "moe/expert_obs_ends", "moe/manual_slice_axes"],
+                ["moe/expert_obs"],
+                name="moe/expert_obs",
+            ),
+            helper.make_node(
+                "Slice",
+                ["obs", "moe/manual_alpha_starts", "moe/manual_alpha_ends", "moe/manual_slice_axes"],
+                ["moe/manual_alpha_raw"],
+                name="moe/manual_alpha_from_command",
+            ),
+            helper.make_node(
+                "Clip",
+                ["moe/manual_alpha_raw", "moe/alpha_min", "moe/alpha_max"],
+                ["moe/manual_alpha"],
+                name="moe/manual_alpha_clip",
+            ),
+        ]
         nodes.extend([
+            helper.make_node("Sub", ["moe/one_const", "moe/manual_alpha"], ["moe/manual_one_minus_alpha"], name="moe/manual_one_minus_alpha"),
             helper.make_node("Mul", ["moe/manual_one_minus_alpha", a_out], ["moe/weighted_a"], name="moe/weighted_a"),
             helper.make_node("Mul", ["moe/manual_alpha", b_out], ["moe/weighted_b"], name="moe/weighted_b"),
             helper.make_node("Add", ["moe/weighted_a", "moe/weighted_b"], ["action"], name="moe/action"),
@@ -584,7 +643,7 @@ class MoETrainer:
             nodes,
             "ManualMoEPolicy",
             [
-                self._renamed_value_info(obs_info, "obs"),
+                manual_obs_info,
             ],
             [
                 self._renamed_value_info(action_info, "action"),
@@ -603,16 +662,22 @@ class MoETrainer:
         manifest_path = os.path.splitext(output_path)[0] + ".json"
         with open(manifest_path, "w", encoding="utf-8") as handle:
             json.dump({
-                "note": "Manual MoE ONNX graph with fixed alpha and explicit expert mixture.",
+                "note": "Manual MoE ONNX graph with alpha read from the final command value.",
                 "policy_a_path": policy_a_path,
                 "policy_b_path": policy_b_path,
-                "manual_alpha": alpha_value,
+                "expert_obs_dim": int(expert_obs_dim),
+                "manual_obs_dim": int(expert_obs_dim + 1),
+                "alpha_command_index": int(expert_obs_dim),
+                "alpha_range": [0.0, 1.0],
                 "moe_onnx_path": output_path,
-                "formula": "action = (1 - alpha) * policy_A(obs) + alpha * policy_B(obs)",
+                "formula": "alpha = clip(obs[..., -1], 0, 1); action = (1 - alpha) * policy_A(obs[..., :-1]) + alpha * policy_B(obs[..., :-1])",
                 "onnx_inputs": ["obs"],
                 "onnx_outputs": ["action"],
             }, handle, indent=2)
-        self._log(f"[moe-manual] exported alpha={alpha_value:.6f}: {output_path}")
+        self._log(
+            f"[moe-manual] exported command-alpha ONNX: expert_obs_dim={expert_obs_dim} "
+            f"manual_obs_dim={expert_obs_dim + 1}: {output_path}"
+        )
         self._log(f"[moe-manual] manifest written: {manifest_path}")
         return output_path
 
@@ -841,13 +906,12 @@ class MoETrainer:
         )
         dataset.alpha = adjusted_alpha
         dataset.gate_obs = self._make_gate_obs(dataset.obs, gate_indices, command_dim, command_scales)
-        lambda_cmd_alpha = max(0.0, float(self.settings.get("cmd_alpha_penalty", 0.0)))
         cmd_label_threshold, cmd_label_alpha, cmd_label_flat_threshold = self._cmd_label_settings()
         self._log(
             f"[moe-train] loaded samples={len(dataset)} obs_dim={dataset.obs.shape[1]} "
             f"gate_dim={len(gate_indices)} gate_features={gate_feature_names} "
             f"smoothness={float(self.settings.get('lambda_smooth', 0.0))} "
-            f"cmd_alpha_penalty={lambda_cmd_alpha} command_scales={command_scales.tolist()} "
+            f"command_scales={command_scales.tolist()} "
             f"cmd_label_threshold={cmd_label_threshold} cmd_label_alpha={cmd_label_alpha} "
             f"cmd_label_adjusted={adjusted_count}"
         )
@@ -890,15 +954,6 @@ class MoETrainer:
                 loss = mse(pred, target)
                 if lambda_smooth > 0.0 and pred.shape[0] > 1:
                     loss = loss + lambda_smooth * torch.mean((pred[1:] - pred[:-1]) ** 2)
-                if lambda_cmd_alpha > 0.0 and command_dim >= 3 and obs.shape[-1] >= command_dim:
-                    command = obs[:, -command_dim:]
-                    command_unit = command / command_scales_tensor
-                    cmd_motion = torch.abs(command_unit[:, 1:3]).sum(dim=1, keepdim=True)
-                    flat_mask = (target < 0.15).float()
-                    weights = flat_mask * cmd_motion
-                    denom = torch.clamp(weights.sum(), min=1e-6)
-                    cmd_loss = torch.sum(weights * (pred ** 2)) / denom
-                    loss = loss + lambda_cmd_alpha * cmd_loss
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -951,9 +1006,6 @@ class MoETrainer:
             "gate_command_dim": int(command_dim),
             "gate_command_scales": command_scales.astype(float).tolist(),
             "lambda_smooth": float(lambda_smooth),
-            "cmd_alpha_penalty": float(lambda_cmd_alpha),
-            "cmd_alpha_penalty_note": "Applied only when alpha_label < 0.15; penalizes alpha for nonzero command[1]/command[2].",
-            "cmd_alpha_penalty_uses_unscaled_command": True,
             "cmd_label_threshold": float(cmd_label_threshold),
             "cmd_label_alpha": float(cmd_label_alpha),
             "cmd_label_flat_threshold": float(cmd_label_flat_threshold),
@@ -975,7 +1027,6 @@ class MoETrainer:
             "manifest_path": artifacts.manifest_path,
             "gate_feature_names": gate_feature_names,
             "gate_dim": int(len(gate_indices)),
-            "cmd_alpha_penalty": float(lambda_cmd_alpha),
             "history": history,
             "stopped": self._stop_requested(),
         }

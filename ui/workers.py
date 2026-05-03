@@ -95,12 +95,12 @@ class MoEWorker(QObject):
                 exported = trainer.export_manual_moe_onnx(
                     self.settings.get("policy_a_path", ""),
                     self.settings.get("policy_b_path", ""),
-                    self.settings.get("manual_alpha", 0.0),
+                    0.0,
                     self.settings.get("output_path", ""),
                 )
                 summary = {
                     "onnx_path": exported,
-                    "manual_alpha": float(self.settings.get("manual_alpha", 0.0)),
+                    "alpha_source": "final_command",
                 }
             else:
                 raise RuntimeError(f"Unknown MoE worker mode: {self.mode}")

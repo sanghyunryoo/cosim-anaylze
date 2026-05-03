@@ -74,7 +74,6 @@ class MoETrainDialog(QDialog):
         self.command_max_le = QLineEdit("1.0")
         self.seed_le = QLineEdit("42")
         self.lambda_smooth_le = QLineEdit("0")
-        self.cmd_alpha_penalty_le = QLineEdit("0")
         self.cmd_label_threshold_le = QLineEdit("0.2")
         self.cmd_label_alpha_le = QLineEdit("0")
         setup_layout.addRow("Samples:", self.samples_le)
@@ -84,13 +83,8 @@ class MoETrainDialog(QDialog):
         setup_layout.addRow("Cmd max:", self.command_max_le)
         setup_layout.addRow("Seed:", self.seed_le)
         setup_layout.addRow("Smoothness:", self.lambda_smooth_le)
-        setup_layout.addRow("Cmd Alpha Penalty:", self.cmd_alpha_penalty_le)
         setup_layout.addRow("Cmd Label Thresh:", self.cmd_label_threshold_le)
         setup_layout.addRow("Cmd Flat Alpha:", self.cmd_label_alpha_le)
-        penalty_hint = QLabel("Flat labels only: keeps alpha low when command[1]/command[2] are nonzero.")
-        penalty_hint.setWordWrap(True)
-        penalty_hint.setStyleSheet("color: #64748B;")
-        setup_layout.addRow("", penalty_hint)
         label_hint = QLabel("If flat and |cmd[1]| or |cmd[2]| exceeds threshold, alpha_label is capped to Cmd Flat Alpha.")
         label_hint.setWordWrap(True)
         label_hint.setStyleSheet("color: #64748B;")
@@ -216,7 +210,6 @@ class MoETrainDialog(QDialog):
             "batch_size": self.batch_size_le.text().strip(),
             "learning_rate": self.lr_le.text().strip(),
             "lambda_smooth": self.lambda_smooth_le.text().strip(),
-            "cmd_alpha_penalty": self.cmd_alpha_penalty_le.text().strip(),
             "cmd_label_threshold": self.cmd_label_threshold_le.text().strip(),
             "cmd_label_alpha": self.cmd_label_alpha_le.text().strip(),
             "val_ratio": self.val_ratio_le.text().strip(),
@@ -239,7 +232,6 @@ class MoETrainDialog(QDialog):
         self.batch_size_le.setText(str(settings.get("batch_size", "256")))
         self.lr_le.setText(str(settings.get("learning_rate", "1e-3")))
         self.lambda_smooth_le.setText(str(settings.get("lambda_smooth", "0")))
-        self.cmd_alpha_penalty_le.setText(str(settings.get("cmd_alpha_penalty", "0")))
         self.cmd_label_threshold_le.setText(str(settings.get("cmd_label_threshold", "0.2")))
         self.cmd_label_alpha_le.setText(str(settings.get("cmd_label_alpha", "0")))
         self.val_ratio_le.setText(str(settings.get("val_ratio", "0.1")))
