@@ -19,12 +19,15 @@ from ui.dialogs.actuator_settings import ActuatorSettingsDialog
 from ui.dialogs.hardware_settings import HardwareSettingsDialog
 from ui.dialogs.observation_settings import ObservationSettingsDialog
 from ui.dialogs.initial_pose_settings import InitialPoseSettingsDialog
+from ui.dialogs.final_pose_settings import FinalPoseSettingsDialog
+from ui.dialogs.command_range_settings import CommandRangeSettingsDialog
 from ui.dialogs.fine_tune_bias_editor import FineTuneBiasEditorDialog
 from ui.dialogs.depth_randomization_settings import DepthRandomizationSettingsDialog
 from ui.dialogs.vision_train_dialog import VisionTrainDialog
 from ui.dialogs.moe_train_dialog import MoETrainDialog
 from ui.dialogs.moe_manual_dialog import MoEManualDialog
-from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker
+from ui.dialogs.homing_train_dialog import HomingTrainDialog
+from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker
 from PyQt5.QtWidgets import QSizePolicy
 from envs.initial_pose import get_default_initial_joint_map, get_initial_pose_joint_names
 
@@ -102,6 +105,11 @@ class MainWindow(QMainWindow):
         self.moe_dialog = None
         self.moe_worker_mode = None
         self.moe_manual_dialog = None
+        self.homing_thread = None
+        self.homing_worker = None
+        self.homing_dialog = None
+        self.homing_worker_mode = None
+        self.homing_command_timer = None
         self.tester = None
         self.current_command_values = [0.0] * 6
         self.command_sensitivity_le_list = []
@@ -120,6 +128,10 @@ class MainWindow(QMainWindow):
         self.hardware_settings_by_env = {}
         self.initial_pose_settings = {}
         self.initial_pose_settings_by_env = {}
+        self.final_pose_settings = {}
+        self.final_pose_settings_by_env = {}
+        self.homing_command_ranges = {}
+        self.homing_command_ranges_by_env = {}
         self.monitor_settings = {}
         self.monitor_settings_by_env = {}
         self.dataset_height_map_settings = {}
@@ -140,6 +152,10 @@ class MainWindow(QMainWindow):
         self.moe_manual_settings_by_env = {}
         self._moe_last_summary = None
         self._moe_last_summary_by_env = {}
+        self.homing_settings = {}
+        self.homing_settings_by_env = {}
+        self._homing_last_summary = None
+        self._homing_last_summary_by_env = {}
         self.mujoco_overlay = MujocoOverlayWidget()
         self.mujoco_overlay.closed.connect(self._on_monitor_overlay_closed)
         self.alpha_overlay = AlphaOverlayWidget()
@@ -537,6 +553,55 @@ class MainWindow(QMainWindow):
             "output_path": os.path.join(output_dir, "manual_moe_policy.onnx"),
         }
 
+    def _make_homing_defaults(self, env_id: str):
+        output_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "homing", "latest")
+        self._ensure_final_pose_defaults_for_env(env_id)
+        self._ensure_homing_command_ranges_for_env(env_id)
+        final_pos = self._final_pose_csv(env_id, "joints")
+        final_vel = self._final_pose_csv(env_id, "velocities")
+        command_mins = self._homing_command_range_csv(env_id, "mins")
+        command_maxs = self._homing_command_range_csv(env_id, "maxs")
+        return {
+            "env_id": env_id,
+            "policy_path": "",
+            "terrains": ["flat"],
+            "samples": "50000",
+            "rollout_steps": "1000",
+            "homing_trajectory_seconds": "3.0",
+            "homing_stand_warmup_steps": "200",
+            "homing_balance_blend": "0.0",
+            "command_min": "-1.0",
+            "command_max": "1.0",
+            "command_mins": command_mins,
+            "command_maxs": command_maxs,
+            "seed": "42",
+            "final_pos": final_pos,
+            "final_vel": final_vel,
+            "epochs": "30",
+            "batch_size": "256",
+            "learning_rate": "1e-3",
+            "val_ratio": "0.1",
+            "hidden_dim": "256",
+            "ppo_total_steps": "200000",
+            "ppo_num_envs": "16",
+            "ppo_rollout_steps": "256",
+            "ppo_epochs": "4",
+            "ppo_learning_rate": "5e-5",
+            "ppo_domain_randomize": "0.1",
+            "ppo_supervised_init": "1",
+            "ppo_use_trajectory_reward": "1",
+            "ppo_mask_wheel_actions": "1",
+            "ppo_strategy_preset": "light",
+            "reward_track": "6.0",
+            "reward_base_acc": "0.002",
+            "reward_upright": "2.0",
+            "reward_action_rate": "0.04",
+            "reward_contact": "0.0005",
+            "selected_datasets": [],
+            "checkpoint_path": os.path.join(output_dir, "homing_policy_supervised.pt"),
+            "output_path": os.path.join(output_dir, "homing_policy.onnx"),
+        }
+
     def _ensure_moe_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.moe_settings_by_env:
@@ -548,6 +613,12 @@ class MainWindow(QMainWindow):
         if env_id not in self.moe_manual_settings_by_env:
             self.moe_manual_settings_by_env[env_id] = self._make_moe_manual_defaults(env_id)
         self.moe_manual_settings = dict(self.moe_manual_settings_by_env[env_id])
+
+    def _ensure_homing_defaults(self, env_id=None):
+        env_id = str(env_id or self.env_id_cb.currentText())
+        if env_id not in self.homing_settings_by_env:
+            self.homing_settings_by_env[env_id] = self._make_homing_defaults(env_id)
+        self.homing_settings = dict(self.homing_settings_by_env[env_id])
 
     def _collect_moe_ui_settings(self, source_settings=None):
         self._ensure_moe_defaults()
@@ -593,8 +664,62 @@ class MainWindow(QMainWindow):
         self.moe_manual_settings_by_env[env_id] = dict(settings)
         return settings
 
+    def _collect_homing_ui_settings(self, source_settings=None):
+        source = dict(source_settings or self.homing_settings)
+        env_id = str(source.get("env_id", self.env_id_cb.currentText()))
+        self._ensure_homing_defaults(env_id)
+        self._ensure_final_pose_defaults_for_env(env_id)
+        self._ensure_homing_command_ranges_for_env(env_id)
+        settings = dict(self.homing_settings)
+        settings.update({
+            "env_id": env_id,
+            "policy_path": str(source.get("policy_path", "")).strip(),
+            "terrains": ["flat"],
+            "samples": str(source.get("samples", settings.get("samples", "50000"))).strip(),
+            "rollout_steps": str(source.get("rollout_steps", settings.get("rollout_steps", "1000"))).strip(),
+            "homing_trajectory_seconds": str(source.get("homing_trajectory_seconds", settings.get("homing_trajectory_seconds", "3.0"))).strip(),
+            "homing_stand_warmup_steps": str(source.get("homing_stand_warmup_steps", settings.get("homing_stand_warmup_steps", "200"))).strip(),
+            "homing_balance_blend": str(source.get("homing_balance_blend", settings.get("homing_balance_blend", "0.0"))).strip(),
+            "command_min": str(source.get("command_min", settings.get("command_min", "-1.0"))).strip(),
+            "command_max": str(source.get("command_max", settings.get("command_max", "1.0"))).strip(),
+            "command_mins": self._homing_command_range_csv(env_id, "mins"),
+            "command_maxs": self._homing_command_range_csv(env_id, "maxs"),
+            "seed": str(source.get("seed", settings.get("seed", "42"))).strip(),
+            "final_pos": self._final_pose_csv(env_id, "joints"),
+            "final_vel": self._final_pose_csv(env_id, "velocities"),
+            "epochs": str(source.get("epochs", settings.get("epochs", "30"))).strip(),
+            "batch_size": str(source.get("batch_size", settings.get("batch_size", "256"))).strip(),
+            "learning_rate": str(source.get("learning_rate", settings.get("learning_rate", "1e-3"))).strip(),
+            "val_ratio": str(source.get("val_ratio", settings.get("val_ratio", "0.1"))).strip(),
+            "hidden_dim": str(source.get("hidden_dim", settings.get("hidden_dim", "256"))).strip(),
+            "ppo_total_steps": str(source.get("ppo_total_steps", settings.get("ppo_total_steps", "20000"))).strip(),
+            "ppo_num_envs": str(source.get("ppo_num_envs", settings.get("ppo_num_envs", "4"))).strip(),
+            "ppo_rollout_steps": str(source.get("ppo_rollout_steps", settings.get("ppo_rollout_steps", "256"))).strip(),
+            "ppo_epochs": str(source.get("ppo_epochs", settings.get("ppo_epochs", "4"))).strip(),
+            "ppo_learning_rate": str(source.get("ppo_learning_rate", settings.get("ppo_learning_rate", "3e-4"))).strip(),
+            "ppo_domain_randomize": str(source.get("ppo_domain_randomize", settings.get("ppo_domain_randomize", "0.3"))).strip(),
+            "ppo_supervised_init": str(source.get("ppo_supervised_init", settings.get("ppo_supervised_init", "1"))).strip(),
+            "ppo_use_trajectory_reward": str(source.get("ppo_use_trajectory_reward", settings.get("ppo_use_trajectory_reward", "1"))).strip(),
+            "ppo_mask_wheel_actions": str(source.get("ppo_mask_wheel_actions", settings.get("ppo_mask_wheel_actions", "1"))).strip(),
+            "ppo_strategy_preset": str(source.get("ppo_strategy_preset", settings.get("ppo_strategy_preset", "light"))).strip(),
+            "reward_track": str(source.get("reward_track", settings.get("reward_track", "6.0"))).strip(),
+            "reward_base_acc": str(source.get("reward_base_acc", settings.get("reward_base_acc", "0.002"))).strip(),
+            "reward_upright": str(source.get("reward_upright", settings.get("reward_upright", "2.0"))).strip(),
+            "reward_action_rate": str(source.get("reward_action_rate", settings.get("reward_action_rate", "0.04"))).strip(),
+            "reward_contact": str(source.get("reward_contact", settings.get("reward_contact", "0.0005"))).strip(),
+            "selected_datasets": list(source.get("selected_datasets", settings.get("selected_datasets", []))),
+            "checkpoint_path": str(source.get("checkpoint_path", settings.get("checkpoint_path", ""))).strip(),
+            "output_path": str(source.get("output_path", settings.get("output_path", ""))).strip(),
+        })
+        self.homing_settings = settings
+        self.homing_settings_by_env[env_id] = dict(settings)
+        return settings
+
     def _moe_dataset_root(self, env_id: str):
         return os.path.join(self._repo_root(), "envs", env_id, "dataset", "moe_gate")
+
+    def _homing_dataset_root(self, env_id: str):
+        return os.path.join(self._repo_root(), "envs", env_id, "dataset", "homing")
 
     def _moe_alpha_onnx_path(self, env_id: str):
         latest_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "moe_gate", "latest")
@@ -626,6 +751,31 @@ class MainWindow(QMainWindow):
             })
         return datasets
 
+    def _list_homing_datasets(self, env_id: str):
+        dataset_root = self._homing_dataset_root(env_id)
+        if not os.path.isdir(dataset_root):
+            return []
+        datasets = []
+        for run_name in sorted(os.listdir(dataset_root), reverse=True):
+            run_dir = os.path.join(dataset_root, run_name)
+            dataset_path = os.path.join(run_dir, "dataset.npz")
+            if not os.path.isfile(dataset_path):
+                continue
+            try:
+                with np.load(dataset_path) as payload:
+                    samples = int(payload["input"].shape[0])
+                    input_dim = int(payload["input"].shape[1])
+                    action_dim = int(payload["action_label"].shape[1])
+            except Exception:
+                samples = 0
+                input_dim = 0
+                action_dim = 0
+            datasets.append({
+                "path": dataset_path,
+                "label": f"{run_name} | {samples} samples | input {input_dim} -> action {action_dim}",
+            })
+        return datasets
+
     def _refresh_moe_dialog(self):
         if self.moe_dialog is None:
             return
@@ -641,6 +791,31 @@ class MainWindow(QMainWindow):
         self.moe_dialog.set_running(running)
         if self._moe_last_summary:
             self.moe_dialog.set_status(f"last: {self._moe_last_summary.get('samples', self._moe_last_summary.get('best_val_loss', 'done'))}")
+
+    def _refresh_homing_dialog(self):
+        if self.homing_dialog is None:
+            return
+        dialog_env = self.homing_dialog.get_settings().get("env_id", "") if self.homing_dialog is not None else ""
+        self._ensure_homing_defaults(dialog_env or self.env_id_cb.currentText())
+        settings = self.homing_settings
+        env_id = settings.get("env_id", self.env_id_cb.currentText())
+        self.homing_dialog.set_settings(settings)
+        self.homing_dialog.set_available_datasets(
+            self._list_homing_datasets(env_id),
+            settings.get("selected_datasets", []),
+        )
+        running = self.homing_thread is not None and self.homing_thread.isRunning()
+        self.homing_dialog.set_running(running)
+        if self._homing_last_summary:
+            self.homing_dialog.set_status(f"last: {self._homing_last_summary.get('samples', self._homing_last_summary.get('onnx_path', 'done'))}")
+
+    def _on_homing_env_changed(self, previous_env_id, new_env_id):
+        if self.homing_dialog is not None and previous_env_id:
+            previous_settings = self.homing_dialog.get_settings()
+            previous_settings["env_id"] = str(previous_env_id)
+            self._collect_homing_ui_settings(previous_settings)
+        self._ensure_homing_defaults(str(new_env_id))
+        self._refresh_homing_dialog()
 
     def _refresh_vision_train_dialog(self):
         if self.vision_train_dialog is None:
@@ -736,6 +911,78 @@ class MainWindow(QMainWindow):
         self.initial_pose_settings = {
             "joints": dict((self.initial_pose_settings_by_env[env_id]).get("joints", {}))
         }
+
+    def _make_final_pose_defaults(self, env_id: str):
+        initial = self._make_initial_pose_defaults(env_id).get("joints", {})
+        return {
+            "joints": dict(initial),
+            "velocities": {joint_name: "0.0" for joint_name in initial.keys()},
+        }
+
+    def _ensure_final_pose_defaults_for_env(self, env_id: str):
+        if env_id not in self.final_pose_settings_by_env:
+            self.final_pose_settings_by_env[env_id] = self._make_final_pose_defaults(env_id)
+        cached = self.final_pose_settings_by_env[env_id]
+        joint_names = list(get_initial_pose_joint_names(env_id))
+        joints = dict(cached.get("joints", {}))
+        velocities = dict(cached.get("velocities", {}))
+        for joint_name in joint_names:
+            joints.setdefault(joint_name, "0.0")
+            velocities.setdefault(joint_name, "0.0")
+        self.final_pose_settings_by_env[env_id] = {
+            "joints": {joint_name: str(joints.get(joint_name, "0.0")) for joint_name in joint_names},
+            "velocities": {joint_name: str(velocities.get(joint_name, "0.0")) for joint_name in joint_names},
+        }
+        if env_id == self.env_id_cb.currentText():
+            self.final_pose_settings = {
+                "joints": dict(self.final_pose_settings_by_env[env_id]["joints"]),
+                "velocities": dict(self.final_pose_settings_by_env[env_id]["velocities"]),
+            }
+
+    def _ensure_final_pose_defaults(self):
+        self._ensure_final_pose_defaults_for_env(self.env_id_cb.currentText())
+
+    def _final_pose_csv(self, env_id: str, key: str):
+        self._ensure_final_pose_defaults_for_env(env_id)
+        values = self.final_pose_settings_by_env[env_id].get(key, {})
+        return ",".join(str(values.get(joint_name, "0.0")) for joint_name in get_initial_pose_joint_names(env_id))
+
+    def _command_dim_for_env(self, env_id: str):
+        if env_id in self.obs_settings_by_env:
+            return max(1, to_int(self.obs_settings_by_env[env_id].get("command_dim", 6), 6))
+        return max(1, to_int(self._make_observation_defaults(env_id).get("command_dim", 6), 6))
+
+    def _make_homing_command_range_defaults(self, env_id: str):
+        cmd_dim = self._command_dim_for_env(env_id)
+        return {
+            "mins": ["-1.0"] * cmd_dim,
+            "maxs": ["1.0"] * cmd_dim,
+        }
+
+    def _ensure_homing_command_ranges_for_env(self, env_id: str):
+        if env_id not in self.homing_command_ranges_by_env:
+            self.homing_command_ranges_by_env[env_id] = self._make_homing_command_range_defaults(env_id)
+        cmd_dim = self._command_dim_for_env(env_id)
+        cached = self.homing_command_ranges_by_env[env_id]
+        mins = list(cached.get("mins", []))
+        maxs = list(cached.get("maxs", []))
+        while len(mins) < cmd_dim:
+            mins.append("-1.0")
+        while len(maxs) < cmd_dim:
+            maxs.append("1.0")
+        self.homing_command_ranges_by_env[env_id] = {
+            "mins": [str(value) for value in mins[:cmd_dim]],
+            "maxs": [str(value) for value in maxs[:cmd_dim]],
+        }
+        if env_id == self.env_id_cb.currentText() or not self.homing_command_ranges:
+            self.homing_command_ranges = {
+                "mins": list(self.homing_command_ranges_by_env[env_id]["mins"]),
+                "maxs": list(self.homing_command_ranges_by_env[env_id]["maxs"]),
+            }
+
+    def _homing_command_range_csv(self, env_id: str, key: str):
+        self._ensure_homing_command_ranges_for_env(env_id)
+        return ",".join(str(value) for value in self.homing_command_ranges_by_env[env_id].get(key, []))
 
     def _make_monitor_defaults(self, env_id: str):
         joint_names = list(get_initial_pose_joint_names(env_id))
@@ -1138,6 +1385,8 @@ class MainWindow(QMainWindow):
             self.initial_pose_settings_by_env[new_env_id] = {
                 "joints": dict((self.initial_pose_settings).get("joints", {}))
             }
+        self._ensure_final_pose_defaults_for_env(new_env_id)
+        self._ensure_homing_command_ranges_for_env(new_env_id)
 
         if new_env_id in self.monitor_settings_by_env:
             self.monitor_settings = dict(self.monitor_settings_by_env[new_env_id])
@@ -1347,6 +1596,27 @@ class MainWindow(QMainWindow):
         if self.tester:
             for i, value in enumerate(self.current_command_values):
                 self.tester.update_command(i, value)
+        if (
+            self.homing_worker is not None
+            and self.homing_worker_mode == "test_policy"
+            and hasattr(self.homing_worker, "update_command_values")
+        ):
+            self.homing_worker.update_command_values(self.current_command_values)
+
+    def _start_homing_command_timer(self):
+        self._stop_homing_command_timer()
+        self._init_default_command_values()
+        self._push_current_command_to_tester()
+        self.homing_command_timer = QTimer(self)
+        self.homing_command_timer.timeout.connect(self.send_current_command)
+        self.homing_command_timer.start(20)
+
+    def _stop_homing_command_timer(self):
+        timer = getattr(self, "homing_command_timer", None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+        self.homing_command_timer = None
 
     def _apply_discrete_command_delta(self, index, direction):
         step = self._parse_float(self.command_sensitivity_le_list[index].text(), 0.1)
@@ -1648,6 +1918,17 @@ class MainWindow(QMainWindow):
         moe_row_layout.addWidget(self.moe_status_inline_label, 1)
 
         env_layout.addRow("MoE:", moe_row)
+
+        homing_row = QWidget()
+        homing_row_layout = QHBoxLayout(homing_row)
+        homing_row_layout.setContentsMargins(0, 0, 0, 0)
+        homing_row_layout.setSpacing(6)
+        self.homing_train_inline_btn = QPushButton("Homing Training")
+        self.homing_train_inline_btn.setFixedWidth(130)
+        self.homing_train_inline_btn.clicked.connect(self.open_homing_train_dialog)
+        homing_row_layout.addWidget(self.homing_train_inline_btn)
+        homing_row_layout.addStretch()
+        env_layout.addRow("Homing:", homing_row)
 
         self.terrain_id_cb = NoWheelComboBox()
         self.terrain_id_cb.addItems([
@@ -2620,6 +2901,312 @@ class MainWindow(QMainWindow):
         if self.moe_manual_dialog is not None:
             self.moe_manual_dialog.set_running(False)
 
+    def open_homing_train_dialog(self):
+        self._ensure_homing_defaults()
+        if self.homing_dialog is None:
+            self.homing_dialog = HomingTrainDialog(self.env_config.keys(), self._terrain_ids(), self)
+            self.homing_dialog.collectRequested.connect(self.collect_homing_data)
+            self.homing_dialog.trainRequested.connect(self.train_homing_policy)
+            self.homing_dialog.rlTrainRequested.connect(self.rl_fine_tune_homing_policy)
+            self.homing_dialog.exportRequested.connect(self.export_homing_onnx)
+            self.homing_dialog.refreshRequested.connect(self._refresh_homing_dialog)
+            self.homing_dialog.stopRequested.connect(self.stop_homing_job)
+            self.homing_dialog.finalPoseRequested.connect(self.open_final_pose_settings)
+            self.homing_dialog.testTeacherRequested.connect(self.test_homing_teacher)
+            self.homing_dialog.testPolicyRequested.connect(self.test_homing_export_policy)
+            self.homing_dialog.switchPolicyRequested.connect(self.switch_homing_export_policy)
+            self.homing_dialog.commandRangeRequested.connect(self.open_homing_command_range_settings)
+            self.homing_dialog.envChanged.connect(self._on_homing_env_changed)
+            self.homing_dialog.set_settings(self.homing_settings)
+        self._refresh_homing_dialog()
+        self.homing_dialog.show()
+        self.homing_dialog.raise_()
+        self.homing_dialog.activateWindow()
+
+    def _start_homing_worker(self, mode, settings):
+        if self.homing_thread is not None and self.homing_thread.isRunning():
+            QMessageBox.warning(self, "Homing Training", "A Homing job is already running.")
+            return False
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_running(True)
+        self.homing_worker_mode = mode
+        self.homing_thread = QThread()
+        self.homing_worker = HomingWorker(self._repo_root(), settings, mode)
+        self.homing_worker.moveToThread(self.homing_thread)
+        self.homing_thread.started.connect(self.homing_worker.run)
+        self.homing_worker.log.connect(self.on_homing_log)
+        self.homing_worker.finished.connect(self.on_homing_finished)
+        self.homing_worker.error.connect(self.on_homing_error)
+        self.homing_worker.finished.connect(self.homing_thread.quit)
+        self.homing_worker.error.connect(self.homing_thread.quit)
+        self.homing_worker.finished.connect(self.homing_worker.deleteLater)
+        self.homing_worker.error.connect(self.homing_worker.deleteLater)
+        self.homing_thread.finished.connect(self._on_homing_thread_finished)
+        self.homing_thread.finished.connect(self.homing_thread.deleteLater)
+        self.homing_thread.start()
+        return True
+
+    def _homing_env_overrides(self, env_id):
+        env_id = str(env_id or self.env_id_cb.currentText())
+        hardware = self.hardware_settings_by_env.get(env_id)
+        if hardware is None:
+            hardware = self._make_hardware_defaults(env_id)
+        hardware_numeric = {k: to_float(v, v) for k, v in dict(hardware).items()}
+
+        action_scales = self.action_scales_by_env.get(env_id)
+        if action_scales is None:
+            action_scales = self._make_action_scale_defaults(env_id)
+
+        action_clippings = self.action_clippings_by_env.get(env_id)
+        if action_clippings is None:
+            action_clippings = self._make_action_clipping_defaults(env_id)
+
+        actuator = self.actuator_settings_by_env.get(env_id)
+        if actuator is None:
+            actuator = self._make_actuator_defaults(env_id)
+
+        initial_pose = self.initial_pose_settings_by_env.get(env_id)
+        if initial_pose is None:
+            initial_pose = self._make_initial_pose_defaults(env_id)
+        initial_positions = {
+            "joints": {
+                joint_name: to_float(value, 0.0)
+                for joint_name, value in dict(initial_pose.get("joints", {})).items()
+            }
+        }
+
+        return {
+            "hardware": hardware_numeric,
+            "action_scales": [to_float(value, 1.0) for value in list(action_scales or [])],
+            "action_clippings": [dict(item) for item in list(action_clippings or [])],
+            "actuator": dict(actuator or {}),
+            "initial_positions": initial_positions,
+            "random": {
+                "precision": self.precision_cb.currentText(),
+                "sensor_noise": self.sensor_noise_cb.currentText(),
+                "init_noise": self.init_noise_slider.value() / 100.0,
+                "sliding_friction": self.sliding_friction_slider.value() / 100.0,
+                "torsional_friction": self.torsional_friction_slider.value() / 100.0,
+                "rolling_friction": self.rolling_friction_slider.value() / 100.0,
+                "friction_loss": self.friction_loss_slider.value() / 100.0,
+                "action_delay_prob": self.action_delay_prob_slider.value() / 100.0,
+                "mass_noise": self.mass_noise_slider.value() / 100.0,
+                "load": self.load_slider.value() / 10.0,
+            },
+        }
+
+    def collect_homing_data(self):
+        dialog_settings = self.homing_dialog.get_settings() if self.homing_dialog is not None else None
+        settings = self._collect_homing_ui_settings(dialog_settings)
+        if not os.path.isfile(settings.get("policy_path", "")):
+            QMessageBox.warning(self, "Homing Training", "Select a valid stand-drive ONNX policy.")
+            return
+        if self.homing_dialog is not None:
+            self.homing_dialog.clear_log()
+            self.homing_dialog.set_status("collecting")
+        self._start_homing_worker("collect", {
+            **settings,
+            "samples": to_int(settings.get("samples", 50000), 50000),
+            "rollout_steps": to_int(settings.get("rollout_steps", 1000), 1000),
+            "homing_trajectory_seconds": to_float(settings.get("homing_trajectory_seconds", 3.0), 3.0),
+            "homing_stand_warmup_steps": to_int(settings.get("homing_stand_warmup_steps", 200), 200),
+            "homing_balance_blend": to_float(settings.get("homing_balance_blend", 0.0), 0.0),
+            "command_min": to_float(settings.get("command_min", -1.0), -1.0),
+            "command_max": to_float(settings.get("command_max", 1.0), 1.0),
+            "seed": to_int(settings.get("seed", 42), 42),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def test_homing_teacher(self):
+        dialog_settings = self.homing_dialog.get_settings() if self.homing_dialog is not None else None
+        settings = self._collect_homing_ui_settings(dialog_settings)
+        if not os.path.isfile(settings.get("policy_path", "")):
+            QMessageBox.warning(self, "Homing Training", "Select a valid stand-drive ONNX policy.")
+            return
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_status("testing teacher")
+            self.homing_dialog.append_log("[homing-test] launching render test on flat terrain.\n")
+        self._start_homing_worker("test_teacher", {
+            **settings,
+            "command_min": to_float(settings.get("command_min", -1.0), -1.0),
+            "command_max": to_float(settings.get("command_max", 1.0), 1.0),
+            "seed": to_int(settings.get("seed", 42), 42),
+            "test_warmup_steps": 200,
+            "test_steps": to_int(settings.get("rollout_steps", 600), 600),
+            "homing_trajectory_seconds": to_float(settings.get("homing_trajectory_seconds", 3.0), 3.0),
+            "homing_balance_blend": to_float(settings.get("homing_balance_blend", 0.0), 0.0),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def test_homing_export_policy(self):
+        dialog_settings = self.homing_dialog.get_settings() if self.homing_dialog is not None else None
+        settings = self._collect_homing_ui_settings(dialog_settings)
+        if not os.path.isfile(settings.get("policy_path", "")):
+            QMessageBox.warning(self, "Homing Training", "Select a valid stand-drive ONNX policy.")
+            return
+        if not os.path.isfile(settings.get("output_path", "")):
+            QMessageBox.warning(self, "Homing Training", "Select a valid exported Homing ONNX file.")
+            return
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_status("testing export policy")
+            self.homing_dialog.append_log("[homing-policy-test] launching render test. Use keyboard commands, then click Switch Policy.\n")
+        self._start_homing_command_timer()
+        self._start_homing_worker("test_policy", {
+            **settings,
+            "test_steps": to_int(settings.get("rollout_steps", 1000), 1000),
+            "command_values": list(self.current_command_values),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def switch_homing_export_policy(self):
+        if self.homing_worker is None or self.homing_worker_mode != "test_policy":
+            if self.homing_dialog is not None:
+                self.homing_dialog.append_log("[homing-policy-test] Start Test Export before switching policy.\n")
+            return
+        self.homing_worker.request_policy_switch()
+        if self.homing_dialog is not None:
+            self.homing_dialog.append_log("[homing-policy-test] switch requested from GUI.\n")
+
+    def train_homing_policy(self):
+        dialog_settings = self.homing_dialog.get_settings() if self.homing_dialog is not None else None
+        settings = self._collect_homing_ui_settings(dialog_settings)
+        if not settings.get("selected_datasets"):
+            QMessageBox.warning(self, "Homing Training", "Select at least one collected Homing dataset.")
+            return
+        if self.homing_dialog is not None:
+            self.homing_dialog.clear_log()
+            self.homing_dialog.set_status("training")
+        self._start_homing_worker("train", {
+            **settings,
+            "epochs": to_int(settings.get("epochs", 30), 30),
+            "batch_size": to_int(settings.get("batch_size", 256), 256),
+            "learning_rate": to_float(settings.get("learning_rate", 1e-3), 1e-3),
+            "val_ratio": to_float(settings.get("val_ratio", 0.1), 0.1),
+            "hidden_dim": to_int(settings.get("hidden_dim", 256), 256),
+            "seed": to_int(settings.get("seed", 42), 42),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def rl_fine_tune_homing_policy(self):
+        dialog_settings = self.homing_dialog.get_settings() if self.homing_dialog is not None else None
+        settings = self._collect_homing_ui_settings(dialog_settings)
+        if not os.path.isfile(settings.get("policy_path", "")):
+            QMessageBox.warning(self, "Homing Training", "Select a valid stand-drive ONNX policy.")
+            return
+        supervised_init = str(settings.get("ppo_supervised_init", "1")).strip().lower() not in ("0", "false", "no", "off")
+        checkpoint_path = settings.get("checkpoint_path", "")
+        if supervised_init and not os.path.isfile(checkpoint_path):
+            QMessageBox.warning(self, "Homing Training", "Select a Homing checkpoint to initialize PPO fine-tuning.")
+            return
+        if supervised_init:
+            try:
+                import torch
+                checkpoint = torch.load(checkpoint_path, map_location="cpu")
+                checkpoint_type = str(checkpoint.get("checkpoint_type", "supervised" if "model_state" in checkpoint else "unknown"))
+                if checkpoint_type != "supervised" or "model_state" not in checkpoint:
+                    QMessageBox.warning(self, "Homing Training", "RL Fine Tune must start from homing_policy_supervised.pt. Run Train Policy first or select the supervised checkpoint.")
+                    return
+            except Exception as exc:
+                QMessageBox.warning(self, "Homing Training", f"Could not validate supervised checkpoint: {exc}")
+                return
+        if self.homing_dialog is not None:
+            self.homing_dialog.clear_log()
+            self.homing_dialog.set_status("ppo fine-tuning")
+        self._start_homing_worker("rl_train", {
+            **settings,
+            "rollout_steps": to_int(settings.get("rollout_steps", 1000), 1000),
+            "homing_trajectory_seconds": to_float(settings.get("homing_trajectory_seconds", 3.0), 3.0),
+            "homing_stand_warmup_steps": to_int(settings.get("homing_stand_warmup_steps", 200), 200),
+            "ppo_total_steps": to_int(settings.get("ppo_total_steps", 20000), 20000),
+            "ppo_num_envs": to_int(settings.get("ppo_num_envs", 4), 4),
+            "ppo_rollout_steps": to_int(settings.get("ppo_rollout_steps", 256), 256),
+            "ppo_epochs": to_int(settings.get("ppo_epochs", 4), 4),
+            "ppo_learning_rate": to_float(settings.get("ppo_learning_rate", 3e-4), 3e-4),
+            "ppo_domain_randomize": to_float(settings.get("ppo_domain_randomize", 0.3), 0.3),
+            "ppo_supervised_init": bool(supervised_init),
+            "ppo_use_trajectory_reward": str(settings.get("ppo_use_trajectory_reward", "1")).strip().lower() not in ("0", "false", "no", "off"),
+            "ppo_mask_wheel_actions": str(settings.get("ppo_mask_wheel_actions", "1")).strip().lower() not in ("0", "false", "no", "off"),
+            "ppo_strategy_preset": str(settings.get("ppo_strategy_preset", "light")).strip(),
+            "reward_track": to_float(settings.get("reward_track", 6.0), 6.0),
+            "reward_base_acc": to_float(settings.get("reward_base_acc", 0.002), 0.002),
+            "reward_upright": to_float(settings.get("reward_upright", 2.0), 2.0),
+            "reward_action_rate": to_float(settings.get("reward_action_rate", 0.04), 0.04),
+            "reward_contact": to_float(settings.get("reward_contact", 0.0005), 0.0005),
+            "hidden_dim": to_int(settings.get("hidden_dim", 256), 256),
+            "seed": to_int(settings.get("seed", 42), 42),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def export_homing_onnx(self):
+        settings = self._collect_homing_ui_settings(self.homing_dialog.get_settings() if self.homing_dialog is not None else None)
+        env_id = settings.get("env_id", self.env_id_cb.currentText())
+        default_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "homing", "latest")
+        checkpoint_path = settings.get("checkpoint_path") or os.path.join(default_dir, "homing_policy.pt")
+        output_path = settings.get("output_path", "")
+        if not output_path:
+            output_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Homing Policy ONNX",
+                os.path.join(default_dir, "homing_policy.onnx"),
+                "ONNX Files (*.onnx)"
+            )
+            if not output_path:
+                return
+            settings["output_path"] = output_path
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_status("exporting")
+        self._start_homing_worker("export", {
+            **settings,
+            "checkpoint_path": checkpoint_path,
+            "output_path": output_path,
+            "env_overrides": self._homing_env_overrides(env_id),
+        })
+
+    def on_homing_log(self, message):
+        if self.homing_dialog is not None:
+            self.homing_dialog.append_log(message)
+
+    def stop_homing_job(self):
+        self._stop_homing_command_timer()
+        if self.homing_worker is not None:
+            self.homing_worker.request_stop()
+        if self.homing_dialog is not None:
+            self.homing_dialog.append_log("[homing] stop requested by user.\n")
+            self.homing_dialog.set_status("stopping")
+
+    def on_homing_finished(self, summary):
+        self._stop_homing_command_timer()
+        self._homing_last_summary = dict(summary or {})
+        env_id = self._homing_last_summary.get("env_id", self.homing_settings.get("env_id", self.env_id_cb.currentText()))
+        self._homing_last_summary_by_env[env_id] = dict(self._homing_last_summary)
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_running(False)
+            self.homing_dialog.set_status("done")
+        if self._homing_last_summary.get("checkpoint_path"):
+            self.homing_settings["checkpoint_path"] = str(self._homing_last_summary.get("checkpoint_path"))
+            self.homing_settings_by_env[env_id] = dict(self.homing_settings)
+        self._refresh_homing_dialog()
+        if self._homing_last_summary.get("stopped", False):
+            QMessageBox.information(self, "Homing Training", "Homing job stopped.")
+        else:
+            QMessageBox.information(self, "Homing Training", "Homing job finished.")
+
+    def on_homing_error(self, error_msg):
+        self._stop_homing_command_timer()
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_running(False)
+            self.homing_dialog.append_log(f"[homing] ERROR: {error_msg}\n")
+            self.homing_dialog.set_status("error")
+        QMessageBox.critical(self, "Homing Training", error_msg)
+
+    def _on_homing_thread_finished(self):
+        self._stop_homing_command_timer()
+        self.homing_thread = None
+        self.homing_worker = None
+        self.homing_worker_mode = None
+        if self.homing_dialog is not None:
+            self.homing_dialog.set_running(False)
+
     def open_hardware_settings(self):
         env_id = self.env_id_cb.currentText()
         self._ensure_hardware_defaults()
@@ -2667,6 +3254,45 @@ class MainWindow(QMainWindow):
             self.initial_pose_settings_by_env[env_id] = {
                 "joints": dict((self.initial_pose_settings).get("joints", {}))
             }
+
+    def open_final_pose_settings(self):
+        env_id = self.homing_dialog.get_settings().get("env_id", self.env_id_cb.currentText()) if self.homing_dialog is not None else self.env_id_cb.currentText()
+        self._ensure_final_pose_defaults_for_env(env_id)
+        dialog = FinalPoseSettingsDialog(dict(self.final_pose_settings_by_env.get(env_id, {})), self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.final_pose_settings = dialog.get_settings()
+            self.final_pose_settings_by_env[env_id] = {
+                "joints": dict((self.final_pose_settings).get("joints", {})),
+                "velocities": dict((self.final_pose_settings).get("velocities", {})),
+            }
+            self._ensure_homing_defaults(env_id)
+            self.homing_settings["final_pos"] = self._final_pose_csv(env_id, "joints")
+            self.homing_settings["final_vel"] = self._final_pose_csv(env_id, "velocities")
+            self.homing_settings_by_env[env_id] = dict(self.homing_settings)
+            self._refresh_homing_dialog()
+
+    def open_homing_command_range_settings(self):
+        env_id = self.homing_dialog.get_settings().get("env_id", self.env_id_cb.currentText()) if self.homing_dialog is not None else self.env_id_cb.currentText()
+        self._ensure_homing_command_ranges_for_env(env_id)
+        dialog = CommandRangeSettingsDialog(dict(self.homing_command_ranges_by_env.get(env_id, {})), self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.homing_command_ranges = dialog.get_settings()
+            self.homing_command_ranges_by_env[env_id] = {
+                "mins": list((self.homing_command_ranges).get("mins", [])),
+                "maxs": list((self.homing_command_ranges).get("maxs", [])),
+            }
+            self._ensure_homing_command_ranges_for_env(env_id)
+            self._ensure_homing_defaults(env_id)
+            self.homing_settings["command_mins"] = self._homing_command_range_csv(env_id, "mins")
+            self.homing_settings["command_maxs"] = self._homing_command_range_csv(env_id, "maxs")
+            mins = self.homing_command_ranges_by_env[env_id]["mins"]
+            maxs = self.homing_command_ranges_by_env[env_id]["maxs"]
+            if mins:
+                self.homing_settings["command_min"] = str(mins[0])
+            if maxs:
+                self.homing_settings["command_max"] = str(maxs[0])
+            self.homing_settings_by_env[env_id] = dict(self.homing_settings)
+            self._refresh_homing_dialog()
 
     def open_depth_randomization_settings(self):
         env_id = self.env_id_cb.currentText()
@@ -3041,4 +3667,9 @@ class MainWindow(QMainWindow):
         if self.moe_thread is not None and self.moe_thread.isRunning():
             self.moe_thread.quit()
             self.moe_thread.wait(1000)
+        if self.homing_dialog is not None and self.homing_dialog.isVisible():
+            self.homing_dialog.close()
+        if self.homing_thread is not None and self.homing_thread.isRunning():
+            self.homing_thread.quit()
+            self.homing_thread.wait(1000)
         super().closeEvent(event)

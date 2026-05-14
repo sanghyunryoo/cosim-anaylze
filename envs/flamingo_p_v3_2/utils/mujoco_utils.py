@@ -126,6 +126,8 @@ class MuJoCoUtils:
             raise RuntimeError(
                 "Heightmap visualization sites not initialized. Call init_heightmap_visualization(res_x, res_x) first."
             )
+        if self.hf_geom_id == -1 or int(self.model.geom_type[self.hf_geom_id]) != int(mujoco.mjtGeom.mjGEOM_HFIELD):
+            return np.zeros((int(res_y) * int(res_x),), dtype=np.float64)
 
         # Extract robot base position (x, y, z) and orientation quaternion [w, x, y, z]
         robot_pos = data.qpos[0:3].astype(np.float64)

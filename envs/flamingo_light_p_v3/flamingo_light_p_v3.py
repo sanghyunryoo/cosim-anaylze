@@ -132,7 +132,7 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
             "ang_vel": ang_vel_noisy,
             "lin_vel_x": lin_vel_noisy[0],
             "lin_vel_y": lin_vel_noisy[1],
-            "lin_vel_Z": lin_vel_noisy[2],
+            "lin_vel_z": lin_vel_noisy[2],
             "projected_gravity": projected_gravity_noisy,
             "height_map": height_map_noisy,
             "last_action": self.action

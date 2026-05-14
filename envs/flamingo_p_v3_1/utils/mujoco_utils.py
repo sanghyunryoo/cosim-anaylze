@@ -145,6 +145,8 @@ class MuJoCoUtils:
             raise RuntimeError(
                 f"Heightmap visualization sites not initialized for prefix '{site_prefix}'."
             )
+        if self.hf_geom_id == -1 or int(self.model.geom_type[self.hf_geom_id]) != int(mujoco.mjtGeom.mjGEOM_HFIELD):
+            return np.zeros((int(res_y) * int(res_x),), dtype=np.float64)
 
         origin_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, frame_body_name)
         if origin_body_id == -1:
