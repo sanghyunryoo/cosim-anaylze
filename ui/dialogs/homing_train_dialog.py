@@ -362,7 +362,9 @@ class HomingTrainDialog(QDialog):
         self.checkpoint_le.setText(str(settings.get("checkpoint_path", "")))
         self.output_le.setText(str(settings.get("output_path", "")))
         joint_count = len(str(settings.get("final_pos", "")).split(",")) if settings.get("final_pos", "") else 0
-        self.final_pose_summary_label.setText(f"flat terrain only | target joints: {joint_count}")
+        same = str(settings.get("final_pose_same", "1")).strip().lower() not in ("0", "false", "no", "off")
+        mode = "same" if same else "priority"
+        self.final_pose_summary_label.setText(f"flat terrain only | target joints: {joint_count} | move: {mode}")
 
     def _apply_rl_preset(self):
         preset = self.rl_preset_cb.currentData()

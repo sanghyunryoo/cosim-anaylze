@@ -439,6 +439,22 @@ class HomingTrainer:
                 pass
         return self._pad_or_trim(parsed, dim, fill=fill)
 
+    def _target_priorities(self, dim):
+        raw = self.settings.get("final_pose_priorities", "")
+        if isinstance(raw, str):
+            values = [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
+        else:
+            values = list(raw or [])
+        parsed = []
+        for index, value in enumerate(values, start=1):
+            try:
+                parsed.append(max(1, int(float(value))))
+            except (TypeError, ValueError):
+                parsed.append(index)
+        if not parsed:
+            parsed = list(range(1, int(dim) + 1))
+        return self._pad_or_trim(parsed, dim, fill=max(parsed) + 1).astype(np.int64)
+
     def _current_joint_state(self, env, action_dim):
         last_obs = env.get_last_obs() or {}
         q_raw = np.asarray(last_obs.get("dof_pos", []), dtype=np.float32).reshape(-1)
@@ -479,6 +495,8 @@ class HomingTrainer:
         step_index,
         total_steps,
         eligible_mask=None,
+        same=True,
+        priorities=None,
     ):
         q_start = np.asarray(q_start, dtype=np.float32).reshape(-1)
         final_q = np.asarray(final_q, dtype=np.float32).reshape(-1)
@@ -490,14 +508,34 @@ class HomingTrainer:
 
         progress = float(step_index + 1) / float(max(1, total_steps))
         progress = float(np.clip(progress, 0.0, 1.0))
-        smooth = progress * progress * (3.0 - 2.0 * progress)
         start_action = q_start / scales
         final_action = final_q / scales
-        action = start_action + smooth * (final_action - start_action)
 
         mask = np.ones((dim,), dtype=bool)
         if eligible_mask is not None:
             mask = self._pad_or_trim(np.asarray(eligible_mask, dtype=np.float32), dim, fill=0.0).astype(bool)
+
+        if bool(same):
+            smooth = progress * progress * (3.0 - 2.0 * progress)
+            action = start_action + smooth * (final_action - start_action)
+        else:
+            priority_values = self._pad_or_trim(priorities, dim, fill=dim).astype(np.int64)
+            active_priorities = sorted({int(priority_values[i]) for i in range(dim) if mask[i]})
+            if not active_priorities:
+                active_priorities = [1]
+            priority_to_group = {priority: index for index, priority in enumerate(active_priorities)}
+            group_count = max(1, len(active_priorities))
+            action = start_action.copy()
+            for i in range(dim):
+                if not mask[i]:
+                    continue
+                group_index = priority_to_group.get(int(priority_values[i]), group_count - 1)
+                group_start = group_index / float(group_count)
+                group_end = (group_index + 1) / float(group_count)
+                local = (progress - group_start) / max(group_end - group_start, 1e-6)
+                local = float(np.clip(local, 0.0, 1.0))
+                smooth = local * local * (3.0 - 2.0 * local)
+                action[i] = start_action[i] + smooth * (final_action[i] - start_action[i])
         action[~mask] = 0.0
         return action.astype(np.float32)
 
@@ -532,6 +570,7 @@ class HomingTrainer:
         trajectory_seconds = max(0.02, float(self.settings.get("homing_trajectory_seconds", 3.0)))
         stand_warmup_steps = max(0, int(self.settings.get("homing_stand_warmup_steps", min(200, rollout_steps))))
         balance_blend = float(np.clip(float(self.settings.get("homing_balance_blend", 0.0)), 0.0, 1.0))
+        final_pose_same = self._as_bool(self.settings.get("final_pose_same", True), True)
         per_terrain_target = int(np.ceil(total_samples / max(1, len(terrains))))
 
         run_name = time.strftime("%Y%m%d_%H%M%S")
@@ -560,15 +599,17 @@ class HomingTrainer:
             action_scales = self._pad_or_trim(action_scales, action_dim, fill=1.0)
             final_q = self._target_vector("final_pos", action_dim, fill=0.0)
             final_dq = self._target_vector("final_vel", action_dim, fill=0.0)
+            final_priorities = self._target_priorities(action_dim)
             control_dt = self._control_dt(env)
             self.settings["teacher_dt"] = control_dt
             trajectory_steps = max(1, int(round(trajectory_seconds / max(control_dt, 1e-6))))
             eligible_mask = ~self._wheel_mask(env, action_dim)
+            priority_groups = len({int(final_priorities[i]) for i in range(action_dim) if eligible_mask[i]})
             collected = 0
             self._log(
                 f"[homing-collect] terrain={terrain} target={per_terrain_target} action_dim={action_dim} "
                 f"trajectory={trajectory_seconds:.2f}s/{trajectory_steps}steps stand_warmup={stand_warmup_steps} "
-                f"balance_blend={balance_blend:.2f}"
+                f"balance_blend={balance_blend:.2f} move={'same' if final_pose_same else f'priority/{priority_groups}'}"
             )
             try:
                 while collected < per_terrain_target and len(input_all) < total_samples:
@@ -608,6 +649,8 @@ class HomingTrainer:
                             traj_step,
                             trajectory_steps,
                             eligible_mask=eligible_mask,
+                            same=final_pose_same,
+                            priorities=final_priorities,
                         )
                         if balance_blend > 0.0:
                             stand_action = policy.get_action(state)
@@ -645,6 +688,8 @@ class HomingTrainer:
             dq=np.asarray(dq_all, dtype=np.float32),
             final_pos=np.asarray(final_q, dtype=np.float32),
             final_vel=np.asarray(final_dq, dtype=np.float32),
+            final_pose_priorities=np.asarray(final_priorities, dtype=np.int64),
+            final_pose_same=np.asarray([bool(final_pose_same)]),
             terrain=np.asarray(terrain_all),
         )
         metadata = {
@@ -655,6 +700,8 @@ class HomingTrainer:
             "action_dim": int(np.asarray(action_all[0]).size),
             "final_pos": np.asarray(final_q, dtype=float).tolist(),
             "final_vel": np.asarray(final_dq, dtype=float).tolist(),
+            "final_pose_same": bool(final_pose_same),
+            "final_pose_priorities": np.asarray(final_priorities, dtype=int).tolist(),
             "trajectory_seconds": float(trajectory_seconds),
             "stand_warmup_steps": int(stand_warmup_steps),
             "balance_blend": float(balance_blend),
@@ -687,15 +734,19 @@ class HomingTrainer:
         action_scales = self._pad_or_trim(config.get("action_scales", []), action_dim, fill=1.0)
         final_q = self._target_vector("final_pos", action_dim, fill=0.0)
         final_dq = self._target_vector("final_vel", action_dim, fill=0.0)
+        final_priorities = self._target_priorities(action_dim)
         control_dt = self._control_dt(env)
         trajectory_seconds = max(0.02, float(self.settings.get("homing_trajectory_seconds", 3.0)))
         trajectory_steps = max(1, int(round(trajectory_seconds / max(control_dt, 1e-6))))
         balance_blend = float(np.clip(float(self.settings.get("homing_balance_blend", 0.0)), 0.0, 1.0))
+        final_pose_same = self._as_bool(self.settings.get("final_pose_same", True), True)
         eligible_mask = ~self._wheel_mask(env, action_dim)
+        priority_groups = len({int(final_priorities[i]) for i in range(action_dim) if eligible_mask[i]})
         total_steps = max(test_steps, trajectory_steps)
         self._log(
             f"[homing-test] flat render test warmup={warmup_steps} homing_steps={trajectory_steps} "
-            f"total_steps={total_steps} trajectory={trajectory_seconds:.2f}s balance_blend={balance_blend:.2f}"
+            f"total_steps={total_steps} trajectory={trajectory_seconds:.2f}s balance_blend={balance_blend:.2f} "
+            f"move={'same' if final_pose_same else f'priority/{priority_groups}'}"
         )
         if termination_disabled:
             self._log("[homing-test] leaf env termination disabled; time-limit truncation still applies.")
@@ -736,6 +787,8 @@ class HomingTrainer:
                     trajectory_step,
                     trajectory_steps,
                     eligible_mask=eligible_mask,
+                    same=final_pose_same,
+                    priorities=final_priorities,
                 )
                 if balance_blend > 0.0:
                     stand_action = policy.get_action(state)
@@ -1040,6 +1093,8 @@ class HomingTrainer:
         terminated,
         truncated,
         weights,
+        final_pose_same=True,
+        final_priorities=None,
         policy_ref_action=None,
     ):
         ref_action = self._timed_trajectory_action(
@@ -1049,6 +1104,8 @@ class HomingTrainer:
             min(step_index, trajectory_steps - 1),
             trajectory_steps,
             eligible_mask=eligible_mask,
+            same=final_pose_same,
+            priorities=final_priorities,
         )
         scales = self._pad_or_trim(action_scales, ref_action.size, fill=1.0)
         q_ref = ref_action * np.maximum(np.abs(scales), 1e-6)
@@ -1154,6 +1211,7 @@ class HomingTrainer:
 
         trajectory_seconds = max(0.02, float(self.settings.get("homing_trajectory_seconds", 3.0)))
         stand_warmup_steps = max(0, int(self.settings.get("homing_stand_warmup_steps", 200)))
+        final_pose_same = self._as_bool(self.settings.get("final_pose_same", True), True)
         weights = {
             "track": float(self.settings.get("reward_track", 6.0)),
             "velocity": float(self.settings.get("reward_velocity", 0.4)),
@@ -1195,9 +1253,11 @@ class HomingTrainer:
             action_scales = self._pad_or_trim(self._base_config("flat").get("action_scales", []), action_dim, fill=1.0)
             final_q = self._target_vector("final_pos", action_dim, fill=0.0)
             final_dq = self._target_vector("final_vel", action_dim, fill=0.0)
+            final_priorities = self._target_priorities(action_dim)
             control_dt = self._control_dt(envs[0])
             trajectory_steps = max(1, int(round(trajectory_seconds / max(control_dt, 1e-6))))
             eligible_mask = ~self._wheel_mask(envs[0], action_dim)
+            priority_groups = len({int(final_priorities[i]) for i in range(action_dim) if eligible_mask[i]})
             action_output_mask = np.ones((action_dim,), dtype=np.float32)
             if mask_wheel_actions:
                 action_output_mask[~eligible_mask] = 0.0
@@ -1266,7 +1326,8 @@ class HomingTrainer:
             self._log(
                 f"[homing-ppo] envs={num_envs} total_steps={total_steps} rollout={rollout_steps} "
                 f"trajectory={trajectory_seconds:.2f}s/{trajectory_steps}steps randomize={randomize_strength:.2f} "
-                f"init={init_mode} traj_reward={use_trajectory_reward} wheel_mask={mask_wheel_actions}"
+                f"init={init_mode} traj_reward={use_trajectory_reward} wheel_mask={mask_wheel_actions} "
+                f"move={'same' if final_pose_same else f'priority/{priority_groups}'}"
             )
 
             updates = int(np.ceil(total_steps / float(num_envs * rollout_steps)))
@@ -1309,6 +1370,8 @@ class HomingTrainer:
                             min(ctx["step"], trajectory_steps - 1),
                             trajectory_steps,
                             eligible_mask=eligible_mask,
+                            same=final_pose_same,
+                            priorities=final_priorities,
                         )
                         reward, done, metrics = self._homing_reward(
                             env,
@@ -1327,6 +1390,8 @@ class HomingTrainer:
                             terminated,
                             truncated,
                             weights,
+                            final_pose_same=final_pose_same,
+                            final_priorities=final_priorities,
                             policy_ref_action=policy_ref_np[env_index],
                         )
                         ctx["episode_reward"] += reward

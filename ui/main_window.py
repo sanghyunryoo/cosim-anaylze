@@ -559,8 +559,10 @@ class MainWindow(QMainWindow):
         self._ensure_homing_command_ranges_for_env(env_id)
         final_pos = self._final_pose_csv(env_id, "joints")
         final_vel = self._final_pose_csv(env_id, "velocities")
+        final_priority = self._final_pose_csv(env_id, "priorities")
         command_mins = self._homing_command_range_csv(env_id, "mins")
         command_maxs = self._homing_command_range_csv(env_id, "maxs")
+        final_pose = self.final_pose_settings_by_env.get(env_id, {})
         return {
             "env_id": env_id,
             "policy_path": "",
@@ -577,6 +579,8 @@ class MainWindow(QMainWindow):
             "seed": "42",
             "final_pos": final_pos,
             "final_vel": final_vel,
+            "final_pose_same": "1" if final_pose.get("same", True) else "0",
+            "final_pose_priorities": final_priority,
             "epochs": "30",
             "batch_size": "256",
             "learning_rate": "1e-3",
@@ -687,6 +691,8 @@ class MainWindow(QMainWindow):
             "seed": str(source.get("seed", settings.get("seed", "42"))).strip(),
             "final_pos": self._final_pose_csv(env_id, "joints"),
             "final_vel": self._final_pose_csv(env_id, "velocities"),
+            "final_pose_same": "1" if self.final_pose_settings_by_env[env_id].get("same", True) else "0",
+            "final_pose_priorities": self._final_pose_csv(env_id, "priorities"),
             "epochs": str(source.get("epochs", settings.get("epochs", "30"))).strip(),
             "batch_size": str(source.get("batch_size", settings.get("batch_size", "256"))).strip(),
             "learning_rate": str(source.get("learning_rate", settings.get("learning_rate", "1e-3"))).strip(),
@@ -914,9 +920,18 @@ class MainWindow(QMainWindow):
 
     def _make_final_pose_defaults(self, env_id: str):
         initial = self._make_initial_pose_defaults(env_id).get("joints", {})
+        priorities = {}
+        group_order = {}
+        for joint_name in initial.keys():
+            group_key = self._final_pose_priority_group_key(joint_name)
+            if group_key not in group_order:
+                group_order[group_key] = len(group_order) + 1
+            priorities[joint_name] = str(group_order[group_key])
         return {
             "joints": dict(initial),
             "velocities": {joint_name: "0.0" for joint_name in initial.keys()},
+            "same": True,
+            "priorities": priorities,
         }
 
     def _ensure_final_pose_defaults_for_env(self, env_id: str):
@@ -926,21 +941,49 @@ class MainWindow(QMainWindow):
         joint_names = list(get_initial_pose_joint_names(env_id))
         joints = dict(cached.get("joints", {}))
         velocities = dict(cached.get("velocities", {}))
+        priorities = dict(cached.get("priorities", {}))
+        same = cached.get("same", True)
+        if not isinstance(same, bool):
+            same = str(same).strip().lower() not in ("0", "false", "no", "off")
+        group_order = {}
         for joint_name in joint_names:
+            group_key = self._final_pose_priority_group_key(joint_name)
+            if group_key not in group_order:
+                group_order[group_key] = len(group_order) + 1
             joints.setdefault(joint_name, "0.0")
             velocities.setdefault(joint_name, "0.0")
+            priorities.setdefault(joint_name, str(group_order[group_key]))
+        grouped_priorities = {}
+        for joint_name in joint_names:
+            group_key = self._final_pose_priority_group_key(joint_name)
+            grouped_priorities.setdefault(group_key, str(priorities.get(joint_name, group_order[group_key])))
         self.final_pose_settings_by_env[env_id] = {
             "joints": {joint_name: str(joints.get(joint_name, "0.0")) for joint_name in joint_names},
             "velocities": {joint_name: str(velocities.get(joint_name, "0.0")) for joint_name in joint_names},
+            "same": bool(same),
+            "priorities": {
+                joint_name: str(grouped_priorities[self._final_pose_priority_group_key(joint_name)])
+                for joint_name in joint_names
+            },
         }
         if env_id == self.env_id_cb.currentText():
             self.final_pose_settings = {
                 "joints": dict(self.final_pose_settings_by_env[env_id]["joints"]),
                 "velocities": dict(self.final_pose_settings_by_env[env_id]["velocities"]),
+                "same": bool(self.final_pose_settings_by_env[env_id]["same"]),
+                "priorities": dict(self.final_pose_settings_by_env[env_id]["priorities"]),
             }
 
     def _ensure_final_pose_defaults(self):
         self._ensure_final_pose_defaults_for_env(self.env_id_cb.currentText())
+
+    @staticmethod
+    def _final_pose_priority_group_key(joint_name: str):
+        name = str(joint_name)
+        for prefix in ("left_", "right_", "FL_", "FR_", "RL_", "RR_"):
+            if name.startswith(prefix):
+                return name[len(prefix):]
+        return name
 
     def _final_pose_csv(self, env_id: str, key: str):
         self._ensure_final_pose_defaults_for_env(env_id)
@@ -3264,10 +3307,14 @@ class MainWindow(QMainWindow):
             self.final_pose_settings_by_env[env_id] = {
                 "joints": dict((self.final_pose_settings).get("joints", {})),
                 "velocities": dict((self.final_pose_settings).get("velocities", {})),
+                "same": bool((self.final_pose_settings).get("same", True)),
+                "priorities": dict((self.final_pose_settings).get("priorities", {})),
             }
             self._ensure_homing_defaults(env_id)
             self.homing_settings["final_pos"] = self._final_pose_csv(env_id, "joints")
             self.homing_settings["final_vel"] = self._final_pose_csv(env_id, "velocities")
+            self.homing_settings["final_pose_same"] = "1" if self.final_pose_settings_by_env[env_id].get("same", True) else "0"
+            self.homing_settings["final_pose_priorities"] = self._final_pose_csv(env_id, "priorities")
             self.homing_settings_by_env[env_id] = dict(self.homing_settings)
             self._refresh_homing_dialog()
 
