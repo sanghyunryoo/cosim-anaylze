@@ -131,15 +131,50 @@ class BonPV1(MujocoEnv, utils.EzPickle):
         self.initial_joint_names = list(qvel_joint_names)
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
-        
-    def _get_obs(self):
+        self.joint_pos_offsets = self._joint_offsets_for_names(qpos_joint_names)
+        self.joint_vel_offsets = self._joint_offsets_for_names(qvel_joint_names)
+        self.action_offsets = self.joint_vel_offsets.copy()
+
+    def _joint_offset_map(self):
+        raw = self.config.get("joint_offsets", {}) or {}
+        if not isinstance(raw, dict):
+            return {}
+        joints = raw.get("joints", raw)
+        if not isinstance(joints, dict):
+            return {}
+        offsets = {}
+        for name, value in joints.items():
+            try:
+                offsets[str(name)] = float(value)
+            except Exception:
+                continue
+        return offsets
+
+    def _joint_offsets_for_names(self, joint_names):
+        offsets = self._joint_offset_map()
+        return np.array([offsets.get(name, 0.0) for name in joint_names], dtype=np.float64)
+
+    def _relative_joint_pos(self):
         dof_pos = self.data.qpos[self.q_indices].copy()
         leg_pos = [4,5,10,11]
         dof_pos[leg_pos] = dof_pos[leg_pos] * self.gear_ratio if self.use_gear else dof_pos[leg_pos]  # Joint space -> Motor space
-        
-        dof_vel = self.data.qvel[self.qd_indices]
+        return dof_pos - self.joint_pos_offsets
+
+    def _relative_joint_vel(self):
+        dof_vel = self.data.qvel[self.qd_indices].copy()
         leg_vel=[4,5,12,13]
         dof_vel[leg_vel] = dof_vel[leg_vel] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[leg_vel]  # Joint space -> Motor space
+        return dof_vel - self.joint_vel_offsets
+
+    def _scaled_relative_action(self, action):
+        return scale_and_clip_action(action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+
+    def _absolute_action_setpoints(self, action):
+        return self._scaled_relative_action(action) + self.action_offsets
+        
+    def _get_obs(self):
+        dof_pos = self._relative_joint_pos()
+        dof_vel = self._relative_joint_vel()
         ang_vel = self.data.sensor('angular-velocity').data.astype(np.double)
         quat = self.data.sensor('orientation').data[[1, 2, 3, 0]].astype(np.double)
         if np.all(quat == 0):
@@ -170,28 +205,28 @@ class BonPV1(MujocoEnv, utils.EzPickle):
         self.action = action
         self.filtered_action = self.control_manager.delay_filter(action)
 
-        # Pull the current joint positions and velocities
-        dof_pos = self.data.qpos[self.q_indices]
-        dof_vel = self.data.qvel[self.qd_indices]
+        # Pull relative joint positions and velocities in policy/control space.
+        dof_pos = self._relative_joint_pos()
+        dof_vel = self._relative_joint_vel()
 
         # Extract joint positions and velocities from observation
         f_pos_hip = dof_pos[0:2]
         f_pos_shoulder = dof_pos[2:4]
-        f_pos_leg = dof_pos[4:6] * self.gear_ratio if self.use_gear else dof_pos[4:6]  # Joint space -> Motor space
+        f_pos_leg = dof_pos[4:6]
         r_pos_hip = dof_pos[6:8]
         r_pos_shoulder = dof_pos[8:10]
-        r_pos_leg = dof_pos[10:12] * self.gear_ratio if self.use_gear else dof_pos[10:12]  # Joint space -> Motor space
+        r_pos_leg = dof_pos[10:12]
 
         f_vel_hip = dof_vel[0:2]
         f_vel_shoulder = dof_vel[2:4]
-        f_vel_leg = dof_vel[4:6] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[4:6]  # Joint space -> Motor space
+        f_vel_leg = dof_vel[4:6]
         f_vel_wheel = dof_vel[6:8]
         r_vel_hip = dof_vel[8:10]
         r_vel_shoulder = dof_vel[10:12]
-        r_vel_leg = dof_vel[12:14] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[12:14]  # Joint space -> Motor space
+        r_vel_leg = dof_vel[12:14]
         r_vel_wheel = dof_vel[14:16]
 
-        action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
+        action_scaled = self._scaled_relative_action(self.filtered_action)
         f_hip_action_scaled = action_scaled[0:2]
         f_shoulder_action_scaled = action_scaled[2:4]
         f_leg_action_scaled = action_scaled[4:6]
@@ -238,8 +273,8 @@ class BonPV1(MujocoEnv, utils.EzPickle):
         return obs, terminated, truncated, info
 
     def _get_info(self):
-        dof_pos = self.data.qpos[self.q_indices]
-        dof_vel = self.data.qvel[self.qd_indices]
+        dof_pos = self._relative_joint_pos()
+        dof_vel = self._relative_joint_vel()
         ang_vel = self.data.sensor('angular-velocity').data.astype(np.double)
         lin_vel = self.data.sensor("linear-velocity").data.astype(np.float32)
         joint_state = [dof_pos[0], dof_pos[1], dof_pos[2], dof_pos[3], dof_pos[4], dof_pos[5], dof_vel[6], dof_vel[7], dof_pos[6], dof_pos[7], dof_pos[8], dof_pos[9], dof_pos[10], dof_pos[11], dof_vel[14], dof_vel[15]
@@ -253,7 +288,7 @@ class BonPV1(MujocoEnv, utils.EzPickle):
             "lin_vel_x": lin_vel[0],
             "lin_vel_y": lin_vel[1],
             "ang_vel_yaw": ang_vel[2],
-            "set_points": scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max),
+            "set_points": self._absolute_action_setpoints(self.filtered_action),
             "state": joint_state
         }
         return info

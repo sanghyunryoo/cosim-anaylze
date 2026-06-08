@@ -27,7 +27,7 @@ class MoEManualDialog(QDialog):
 
         layout = QVBoxLayout(self)
         formula_label = QLabel(
-            "Formula: alpha = last command in obs, clipped to 0..1; action = (1 - alpha) * Policy A(obs[:-1]) + alpha * Policy B(obs[:-1])"
+            "Formula: alpha = last obs value, clipped to 0..1; physical = (1-alpha)*A(obs[:-1])*Scale A + alpha*B(obs[:-1])*Scale B; action = physical / Output scale"
         )
         formula_label.setWordWrap(True)
         formula_label.setStyleSheet("font-weight: 600; color: #1f2937;")
@@ -38,10 +38,16 @@ class MoEManualDialog(QDialog):
 
         self.policy_a_le = QLineEdit()
         self.policy_b_le = QLineEdit()
+        self.policy_a_scales_le = QLineEdit()
+        self.policy_b_scales_le = QLineEdit()
+        self.output_scales_le = QLineEdit()
         self.output_le = QLineEdit()
 
         form.addRow("Policy A:", self._file_row(self.policy_a_le, save=False))
         form.addRow("Policy B:", self._file_row(self.policy_b_le, save=False))
+        form.addRow("Scale A:", self.policy_a_scales_le)
+        form.addRow("Scale B:", self.policy_b_scales_le)
+        form.addRow("Output scale:", self.output_scales_le)
         form.addRow("Output:", self._file_row(self.output_le, save=True))
 
         self.status_label = QLabel("idle")
@@ -89,6 +95,9 @@ class MoEManualDialog(QDialog):
         return {
             "policy_a_path": self.policy_a_le.text().strip(),
             "policy_b_path": self.policy_b_le.text().strip(),
+            "policy_a_action_scales": self.policy_a_scales_le.text().strip(),
+            "policy_b_action_scales": self.policy_b_scales_le.text().strip(),
+            "output_action_scales": self.output_scales_le.text().strip(),
             "output_path": self.output_le.text().strip(),
         }
 
@@ -96,6 +105,9 @@ class MoEManualDialog(QDialog):
         settings = dict(settings or {})
         self.policy_a_le.setText(str(settings.get("policy_a_path", "")))
         self.policy_b_le.setText(str(settings.get("policy_b_path", "")))
+        self.policy_a_scales_le.setText(str(settings.get("policy_a_action_scales", "")))
+        self.policy_b_scales_le.setText(str(settings.get("policy_b_action_scales", "")))
+        self.output_scales_le.setText(str(settings.get("output_action_scales", "")))
         self.output_le.setText(str(settings.get("output_path", "")))
 
     def set_status(self, text):

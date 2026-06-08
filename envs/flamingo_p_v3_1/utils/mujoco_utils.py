@@ -100,6 +100,27 @@ class MuJoCoUtils:
                 site_ids[i][j] = sid
         self.site_ids_by_prefix[prefix] = site_ids
 
+    def color_heightmap_by_mask(
+        self,
+        valid_mask,
+        res_x,
+        res_y,
+        prefix="heightmap_site",
+        valid_rgba=(0.0, 1.0, 0.0, 0.7),
+        invalid_rgba=(1.0, 1.0, 1.0, 0.7),
+    ):
+        site_ids = self.site_ids_by_prefix.get(prefix)
+        if site_ids is None:
+            raise RuntimeError(
+                f"Heightmap visualization sites not initialized for prefix '{prefix}'."
+            )
+
+        mask = np.asarray(valid_mask, dtype=bool).reshape(int(res_y), int(res_x))
+        for i in range(int(res_y)):
+            for j in range(int(res_x)):
+                sid = site_ids[i][j]
+                self.model.site_rgba[sid][:] = valid_rgba if mask[i, j] else invalid_rgba
+
     def get_height_map(
         self,
         data,
@@ -112,6 +133,7 @@ class MuJoCoUtils:
         frame_body_name="base_link",
         site_prefix="heightmap_site",
         axis_body_name=None,
+        return_points=False,
     ):
         """
         Generate a heightmap by raycasting from the robot's base frame onto the ground.
@@ -145,8 +167,12 @@ class MuJoCoUtils:
             raise RuntimeError(
                 f"Heightmap visualization sites not initialized for prefix '{site_prefix}'."
             )
-        if self.hf_geom_id == -1 or int(self.model.geom_type[self.hf_geom_id]) != int(mujoco.mjtGeom.mjGEOM_HFIELD):
-            return np.zeros((int(res_y) * int(res_x),), dtype=np.float64)
+        if self.hf_geom_id == -1:
+            heightmap = np.zeros((int(res_y), int(res_x)), dtype=np.float64)
+            hit_points = np.zeros((int(res_y), int(res_x), 3), dtype=np.float64)
+            if return_points:
+                return heightmap.flatten(), hit_points.reshape(-1, 3)
+            return heightmap.flatten()
 
         origin_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, frame_body_name)
         if origin_body_id == -1:
@@ -194,6 +220,7 @@ class MuJoCoUtils:
         y_robot = np.linspace(y_min_robot, y_max_robot, num_y, dtype=np.float64)
         XX_robot, YY_robot = np.meshgrid(x_robot, y_robot)
         heightmap = np.zeros((num_y, num_x), dtype=np.float64)
+        hit_points = np.zeros((num_y, num_x, 3), dtype=np.float64)
 
         for i in range(num_y):
             for j in range(num_x):
@@ -234,7 +261,10 @@ class MuJoCoUtils:
                 data.site_xpos[sid][0] = P_world[0]
                 data.site_xpos[sid][1] = P_world[1]
                 data.site_xpos[sid][2] = terrain_height
+                hit_points[i, j] = [P_world[0], P_world[1], terrain_height]
                 self.model.site_size[sid][0] = 0.01
                 self.model.site_rgba[sid][3] = 0.6
 
+        if return_points:
+            return heightmap.flatten(), hit_points.reshape(-1, 3)
         return heightmap.flatten()

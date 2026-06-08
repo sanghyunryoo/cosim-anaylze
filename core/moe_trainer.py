@@ -309,6 +309,43 @@ class MoETrainer:
         }
         return config
 
+    def _default_action_scales(self):
+        try:
+            env_table = self._load_yaml("config/env_table.yaml")
+            env_cfg = dict(env_table.get(self.env_id, {}) or {})
+            return [float(v) for v in list(env_cfg.get("action_scales", []) or [])]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _parse_scale_values(value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            try:
+                payload = json.loads(text)
+                if isinstance(payload, (list, tuple)):
+                    return [float(v) for v in payload]
+            except Exception:
+                pass
+            return [float(part.strip()) for part in text.replace(";", ",").split(",") if part.strip()]
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return [float(v) for v in list(value)]
+        return []
+
+    def _action_scale_vector(self, key, action_dim, default=None):
+        values = self._parse_scale_values(self.settings.get(key, ""))
+        if not values:
+            values = self._parse_scale_values(default)
+        if not values:
+            values = [1.0] * int(action_dim)
+        if len(values) < int(action_dim):
+            values = values + [1.0] * (int(action_dim) - len(values))
+        return [float(v) for v in values[:int(action_dim)]]
+
     def _dataset_root(self):
         return os.path.join(self.repo_root, "envs", self.env_id, "dataset", "moe_gate")
 
@@ -467,11 +504,35 @@ class MoETrainer:
             copied.name = self._prefixed_name(copied.name, prefix, external_map) if copied.name else ""
             copied.input[:] = [self._prefixed_name(name, prefix, external_map) for name in copied.input]
             copied.output[:] = [self._prefixed_name(name, prefix, external_map) for name in copied.output]
+            if copied.op_type in ("Unsqueeze", "Squeeze") and len(copied.input) == 1:
+                axes = None
+                kept_attrs = []
+                for attr in copied.attribute:
+                    if attr.name == "axes":
+                        axes = list(attr.ints)
+                    else:
+                        kept_attrs.append(attr)
+                if axes is not None:
+                    axes_name = f"{copied.name or prefix + copied.op_type}/axes"
+                    target_initializers.append(
+                        self._make_int64_tensor(axes_name, [len(axes)], [int(v) for v in axes])
+                    )
+                    copied.input.append(axes_name)
+                    copied.ClearField("attribute")
+                    copied.attribute.extend(kept_attrs)
             target_nodes.append(copied)
 
         if not graph.output:
             raise RuntimeError(f"ONNX graph '{prefix}' has no output.")
         return self._prefixed_name(graph.output[0].name, prefix, external_map), runtime_input, graph.output[0]
+
+    @staticmethod
+    def _make_int64_tensor(name, dims, values):
+        try:
+            from onnx import TensorProto, helper
+        except Exception as exc:
+            raise RuntimeError("ONNX export requires the 'onnx' package.") from exc
+        return helper.make_tensor(name, TensorProto.INT64, dims, values)
 
     @staticmethod
     def _renamed_value_info(value_info, name):
@@ -503,6 +564,34 @@ class MoETrainer:
         dims[-1].dim_value = int(dims[-1].dim_value) + int(extra_dim)
         return copied
 
+    def _add_scaled_mixture_nodes(self, helper, TensorProto, nodes, initializers, a_out, b_out, alpha, action_dim, prefix="moe"):
+        default_scales = self._default_action_scales()
+        scale_a = self._action_scale_vector("policy_a_action_scales", action_dim, default_scales)
+        scale_b = self._action_scale_vector("policy_b_action_scales", action_dim, default_scales)
+        scale_out = self._action_scale_vector("output_action_scales", action_dim, default_scales)
+        inv_out = [1.0 / v if abs(float(v)) > 1e-8 else 1.0 for v in scale_out]
+        initializers.extend([
+            helper.make_tensor(f"{prefix}/one_const", TensorProto.FLOAT, [1], [1.0]),
+            helper.make_tensor(f"{prefix}/policy_a_action_scales", TensorProto.FLOAT, [1, int(action_dim)], scale_a),
+            helper.make_tensor(f"{prefix}/policy_b_action_scales", TensorProto.FLOAT, [1, int(action_dim)], scale_b),
+            helper.make_tensor(f"{prefix}/output_action_inv_scales", TensorProto.FLOAT, [1, int(action_dim)], inv_out),
+        ])
+        nodes.extend([
+            helper.make_node("Mul", [a_out, f"{prefix}/policy_a_action_scales"], [f"{prefix}/a_physical"], name=f"{prefix}/a_to_physical"),
+            helper.make_node("Mul", [b_out, f"{prefix}/policy_b_action_scales"], [f"{prefix}/b_physical"], name=f"{prefix}/b_to_physical"),
+            helper.make_node("Sub", [f"{prefix}/one_const", alpha], [f"{prefix}/one_minus_alpha"], name=f"{prefix}/one_minus_alpha"),
+            helper.make_node("Mul", [f"{prefix}/one_minus_alpha", f"{prefix}/a_physical"], [f"{prefix}/weighted_a_physical"], name=f"{prefix}/weighted_a_physical"),
+            helper.make_node("Mul", [alpha, f"{prefix}/b_physical"], [f"{prefix}/weighted_b_physical"], name=f"{prefix}/weighted_b_physical"),
+            helper.make_node("Add", [f"{prefix}/weighted_a_physical", f"{prefix}/weighted_b_physical"], [f"{prefix}/mixed_physical"], name=f"{prefix}/mixed_physical"),
+            helper.make_node("Mul", [f"{prefix}/mixed_physical", f"{prefix}/output_action_inv_scales"], ["action"], name=f"{prefix}/physical_to_output_action"),
+        ])
+        return {
+            "policy_a_action_scales": scale_a,
+            "policy_b_action_scales": scale_b,
+            "output_action_scales": scale_out,
+            "formula": "physical_a = policy_A(obs) * scale_A; physical_b = policy_B(obs) * scale_B; action = ((1-alpha)*physical_a + alpha*physical_b) / output_scale",
+        }
+
     def export_fused_moe_onnx(self, policy_a_path, policy_b_path, gate_onnx_path, output_path):
         try:
             import onnx
@@ -527,14 +616,10 @@ class MoETrainer:
         b_out, _, _ = self._append_prefixed_graph(nodes, initializers, policy_b, "policy_b/", "obs")
         alpha_raw, _, _ = self._append_prefixed_graph(nodes, initializers, gate, "gate/", "obs")
 
-        one_const = helper.make_tensor("moe/one_const", TensorProto.FLOAT, [1], [1.0])
-        initializers.append(one_const)
-        nodes.extend([
-            helper.make_node("Sub", ["moe/one_const", alpha_raw], ["moe/one_minus_alpha"], name="moe/one_minus_alpha"),
-            helper.make_node("Mul", ["moe/one_minus_alpha", a_out], ["moe/weighted_a"], name="moe/weighted_a"),
-            helper.make_node("Mul", [alpha_raw, b_out], ["moe/weighted_b"], name="moe/weighted_b"),
-            helper.make_node("Add", ["moe/weighted_a", "moe/weighted_b"], ["action"], name="moe/action"),
-        ])
+        _rank, action_dim = self._value_info_rank_and_last_dim(action_info)
+        scale_manifest = self._add_scaled_mixture_nodes(
+            helper, TensorProto, nodes, initializers, a_out, b_out, alpha_raw, int(action_dim), prefix="moe"
+        )
 
         opsets = {}
         for model in (policy_a, policy_b, gate):
@@ -563,6 +648,18 @@ class MoETrainer:
         onnx.checker.check_model(model)
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         onnx.save(model, output_path)
+        manifest_path = os.path.splitext(output_path)[0] + ".json"
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "note": "Scale-aware fused MoE ONNX. Policy outputs are converted through per-policy action scales before mixing.",
+                "policy_a_path": policy_a_path,
+                "policy_b_path": policy_b_path,
+                "gate_onnx_path": gate_onnx_path,
+                "moe_onnx_path": output_path,
+                "onnx_inputs": ["obs"],
+                "onnx_outputs": ["action"],
+                **scale_manifest,
+            }, handle, indent=2)
         self._log(f"[moe-export] fused MoE ONNX exported: {output_path}")
         return output_path
 
@@ -603,7 +700,6 @@ class MoETrainer:
             helper.make_tensor("moe/manual_slice_axes", TensorProto.INT64, [1], [slice_axis]),
             helper.make_tensor("moe/alpha_min", TensorProto.FLOAT, [1], [0.0]),
             helper.make_tensor("moe/alpha_max", TensorProto.FLOAT, [1], [1.0]),
-            helper.make_tensor("moe/one_const", TensorProto.FLOAT, [1], [1.0]),
         ])
         nodes[0:0] = [
             helper.make_node(
@@ -625,12 +721,10 @@ class MoETrainer:
                 name="moe/manual_alpha_clip",
             ),
         ]
-        nodes.extend([
-            helper.make_node("Sub", ["moe/one_const", "moe/manual_alpha"], ["moe/manual_one_minus_alpha"], name="moe/manual_one_minus_alpha"),
-            helper.make_node("Mul", ["moe/manual_one_minus_alpha", a_out], ["moe/weighted_a"], name="moe/weighted_a"),
-            helper.make_node("Mul", ["moe/manual_alpha", b_out], ["moe/weighted_b"], name="moe/weighted_b"),
-            helper.make_node("Add", ["moe/weighted_a", "moe/weighted_b"], ["action"], name="moe/action"),
-        ])
+        _rank, action_dim = self._value_info_rank_and_last_dim(action_info)
+        scale_manifest = self._add_scaled_mixture_nodes(
+            helper, TensorProto, nodes, initializers, a_out, b_out, "moe/manual_alpha", int(action_dim), prefix="moe/manual"
+        )
 
         opsets = {}
         for model in (policy_a, policy_b):
@@ -670,7 +764,10 @@ class MoETrainer:
                 "alpha_command_index": int(expert_obs_dim),
                 "alpha_range": [0.0, 1.0],
                 "moe_onnx_path": output_path,
-                "formula": "alpha = clip(obs[..., -1], 0, 1); action = (1 - alpha) * policy_A(obs[..., :-1]) + alpha * policy_B(obs[..., :-1])",
+                "formula": "alpha = clip(obs[..., -1], 0, 1); " + scale_manifest["formula"],
+                "policy_a_action_scales": scale_manifest["policy_a_action_scales"],
+                "policy_b_action_scales": scale_manifest["policy_b_action_scales"],
+                "output_action_scales": scale_manifest["output_action_scales"],
                 "onnx_inputs": ["obs"],
                 "onnx_outputs": ["action"],
             }, handle, indent=2)
@@ -1014,6 +1111,9 @@ class MoETrainer:
             "dataset_paths": dataset_paths,
             "policy_a_path": self.settings.get("policy_a_path", ""),
             "policy_b_path": self.settings.get("policy_b_path", ""),
+            "policy_a_action_scales": self.settings.get("policy_a_action_scales", ""),
+            "policy_b_action_scales": self.settings.get("policy_b_action_scales", ""),
+            "output_action_scales": self.settings.get("output_action_scales", ""),
         }
         torch.save(checkpoint, artifacts.checkpoint_path)
         summary = {
@@ -1073,6 +1173,9 @@ class MoETrainer:
             shutil.copyfile(gate_onnx_path, artifacts.alpha_onnx_path)
         policy_a_path = checkpoint.get("policy_a_path", self.settings.get("policy_a_path", ""))
         policy_b_path = checkpoint.get("policy_b_path", self.settings.get("policy_b_path", ""))
+        for key in ("policy_a_action_scales", "policy_b_action_scales", "output_action_scales"):
+            if key in checkpoint and checkpoint.get(key, "") not in (None, ""):
+                self.settings[key] = checkpoint.get(key, "")
         fused_path = self.export_fused_moe_onnx(policy_a_path, policy_b_path, gate_onnx_path, output_path)
         manifest = {
             "note": "Fused ONNX graph with Policy A, Policy B, GateNet, and explicit expert mixture.",
@@ -1081,7 +1184,10 @@ class MoETrainer:
             "gate_onnx_path": gate_onnx_path,
             "alpha_onnx_path": artifacts.alpha_onnx_path,
             "moe_onnx_path": fused_path,
-            "formula": "action = (1 - alpha) * policy_A(obs) + alpha * policy_B(obs)",
+            "formula": "physical_a = policy_A(obs) * scale_A; physical_b = policy_B(obs) * scale_B; action = ((1-alpha)*physical_a + alpha*physical_b) / output_scale",
+            "policy_a_action_scales": self.settings.get("policy_a_action_scales", ""),
+            "policy_b_action_scales": self.settings.get("policy_b_action_scales", ""),
+            "output_action_scales": self.settings.get("output_action_scales", ""),
             "gate_feature_names": checkpoint.get("gate_feature_names", ["full_obs"]),
             "gate_input_indices": list(gate_indices),
             "gate_command_dim": int(checkpoint.get("gate_command_dim", 0)),

@@ -187,7 +187,7 @@
         <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
         <material name="rubber" rgba="0.4 0.4 0.4 1" shininess="0.5" reflectance="0.2"/>
 
-        <mesh name="base_link"        file="../mesh/base_link_modified.STL"/>
+        <mesh name="base_link"        file="../mesh/base_link_gun.STL"/>
         <mesh name="FL_hip_link"      file="../mesh/FL_hip_link.STL"/>
         <mesh name="FL_shoulder_link" file="../mesh/FL_shoulder_link.STL"/>
         <mesh name="FL_leg_link"      file="../mesh/FL_leg_link.STL"/>

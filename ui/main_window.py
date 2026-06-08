@@ -27,7 +27,8 @@ from ui.dialogs.vision_train_dialog import VisionTrainDialog
 from ui.dialogs.moe_train_dialog import MoETrainDialog
 from ui.dialogs.moe_manual_dialog import MoEManualDialog
 from ui.dialogs.homing_train_dialog import HomingTrainDialog
-from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker
+from ui.dialogs.ctbc_train_dialog import CtbcTrainDialog
+from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker, CtbcWorker
 from PyQt5.QtWidgets import QSizePolicy
 from envs.initial_pose import get_default_initial_joint_map, get_initial_pose_joint_names
 
@@ -68,7 +69,7 @@ class MainWindow(QMainWindow):
         with open(config_path) as f:
             self.env_config = yaml.full_load(f)
 
-        self.obs_types = ["dof_pos", "dof_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "ang_vel", "projected_gravity", "height_map", "last_action"]
+        self.obs_types = ["dof_pos", "dof_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "ang_vel", "projected_gravity", "height_map", "masked_height_map", "last_action"]
 
         # Per-environment observation settings cache
         self.obs_settings_by_env = {}
@@ -108,7 +109,11 @@ class MainWindow(QMainWindow):
         self.homing_thread = None
         self.homing_worker = None
         self.homing_dialog = None
+        self.ctbc_dialog = None
         self.homing_worker_mode = None
+        self.ctbc_thread = None
+        self.ctbc_worker = None
+        self.ctbc_worker_mode = None
         self.homing_command_timer = None
         self.tester = None
         self.current_command_values = [0.0] * 6
@@ -154,6 +159,8 @@ class MainWindow(QMainWindow):
         self._moe_last_summary_by_env = {}
         self.homing_settings = {}
         self.homing_settings_by_env = {}
+        self.ctbc_settings = {}
+        self.ctbc_settings_by_env = {}
         self._homing_last_summary = None
         self._homing_last_summary_by_env = {}
         self.mujoco_overlay = MujocoOverlayWidget()
@@ -250,7 +257,10 @@ class MainWindow(QMainWindow):
             key = str(i)
             merged_command_scales[key] = to_float(command_scales_cfg.get(key, 1.0), 1.0)
 
-        height_in_order = ("height_map" in stacked_list) or ("height_map" in non_stacked_list)
+        height_in_order = any(
+            name in stacked_list or name in non_stacked_list
+            for name in ("height_map", "masked_height_map")
+        )
         if height_in_order:
             height_map_yaml = settings_cfg.get("height_map", {}) if isinstance(settings_cfg.get("height_map", {}), dict) else {}
             height_map_val = {
@@ -523,10 +533,14 @@ class MainWindow(QMainWindow):
         ]
 
     def _make_moe_defaults(self, env_id: str):
+        action_scales = ",".join(str(v) for v in self._make_action_scale_defaults(env_id))
         return {
             "env_id": env_id,
             "policy_a_path": "",
             "policy_b_path": "",
+            "policy_a_action_scales": action_scales,
+            "policy_b_action_scales": action_scales,
+            "output_action_scales": action_scales,
             "terrains": ["flat", "rocky_easy", "rocky_hard", "stairs_up_easy", "stairs_up_normal", "stairs_up_hard"],
             "samples": "200000",
             "rollout_steps": "1000",
@@ -546,10 +560,14 @@ class MainWindow(QMainWindow):
 
     def _make_moe_manual_defaults(self, env_id: str):
         output_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "moe_manual")
+        action_scales = ",".join(str(v) for v in self._make_action_scale_defaults(env_id))
         return {
             "env_id": env_id,
             "policy_a_path": "",
             "policy_b_path": "",
+            "policy_a_action_scales": action_scales,
+            "policy_b_action_scales": action_scales,
+            "output_action_scales": action_scales,
             "output_path": os.path.join(output_dir, "manual_moe_policy.onnx"),
         }
 
@@ -586,9 +604,9 @@ class MainWindow(QMainWindow):
             "learning_rate": "1e-3",
             "val_ratio": "0.1",
             "hidden_dim": "256",
-            "ppo_total_steps": "200000",
-            "ppo_num_envs": "16",
-            "ppo_rollout_steps": "256",
+            "ppo_total_steps": "1000000",
+            "ppo_num_envs": "32",
+            "ppo_rollout_steps": "512",
             "ppo_epochs": "4",
             "ppo_learning_rate": "5e-5",
             "ppo_domain_randomize": "0.1",
@@ -604,6 +622,118 @@ class MainWindow(QMainWindow):
             "selected_datasets": [],
             "checkpoint_path": os.path.join(output_dir, "homing_policy_supervised.pt"),
             "output_path": os.path.join(output_dir, "homing_policy.onnx"),
+        }
+
+    def _make_ctbc_defaults(self, env_id: str):
+        output_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "ctbc", "latest")
+        self._ensure_homing_command_ranges_for_env(env_id)
+        return {
+            "task_mode": "ctbc",
+            "env_id": env_id,
+            "policy_path": "",
+            "ctbc_terrain": "stairs_up_easy",
+            "ctbc_contact_threshold": "30.0",
+            "ctbc_contact_window": "3",
+            "ctbc_lift_amplitude": "0.90",
+            "ctbc_lift_period": "0.75",
+            "ctbc_anneal_ratio": "0.70",
+            "ctbc_episode_steps": "1024",
+            "ctbc_residual_limit": "4.0",
+            "ctbc_gate_height_threshold": "0.06",
+            "ctbc_gate_height_softness": "0.025",
+            "ctbc_gate_rise": "0.35",
+            "ctbc_gate_fall": "0.08",
+            "ctbc_gate_lift_threshold": "0.25",
+            "ctbc_gate_reward_threshold": "0.35",
+            "ctbc_assist_trigger_gate": "0.12",
+            "ctbc_assist_gate_floor": "0.85",
+            "ctbc_assist_min": "0.0",
+            "ctbc_gate_residual_runtime": "0",
+            "ctbc_anneal_bc_with_assist": "1",
+            "ctbc_distill_primitive": "1",
+            "ctbc_bc_weight_min": "0.15",
+            "ctbc_reflex_only": "1",
+            "ctbc_controller_candidates": "64",
+            "ctbc_reflex_samples": "8192",
+            "ctbc_reflex_epochs": "12",
+            "ctbc_reflex_batch": "256",
+            "ctbc_reflex_lr": "3e-4",
+            "ctbc_reflex_flat_ratio": "0.35",
+            "ctbc_reflex_gain": "1.0",
+            "ctbc_reflex_segment_steps": "128",
+            "ctbc_fast_teacher_steps": "4096",
+            "ctbc_fast_teacher_epochs": "6",
+            "ctbc_fast_teacher_batch": "256",
+            "ctbc_fast_teacher_lr": "2e-4",
+            "ctbc_fast_teacher_gain": "1.0",
+            "ctbc_fast_teacher_stair_height": "0.12",
+            "ctbc_safe_tilt": "0.22",
+            "ctbc_emergency_tilt": "0.34",
+            "ctbc_terminate_tilt": "0.42",
+            "ctbc_tilt_guard_penalty": "8.0",
+            "ctbc_bad_contact_threshold": "1.0",
+            "ctbc_bad_contact_penalty": "20.0",
+            "ctbc_lift_cooldown": "0.35",
+            "ctbc_contact_baseline_alpha": "0.02",
+            "ctbc_contact_spike_threshold": "80.0",
+            "ctbc_force_alternating_lift": "1",
+            "ctbc_curriculum_enabled": "1",
+            "ctbc_stair_height_min": "0.025",
+            "ctbc_stair_height_max": "0.20",
+            "ctbc_curriculum_ratio": "0.60",
+            "ctbc_select_after_ratio": "0.70",
+            "ctbc_shoulder_gain": "0.50",
+            "ctbc_leg_gain": "0.0",
+            "ctbc_leg_push_gain": "1.75",
+            "ctbc_hip_gain": "0.0",
+            "ctbc_stance_gain": "0.30",
+            "ctbc_wheel_push_gain": "0.0",
+            "ctbc_ff_clip": "4.0",
+            "ctbc_action_clip": "4.0",
+            "ctbc_compensate_action_scale": "1",
+            "ctbc_clearance_target": "0.14",
+            "ctbc_base_height_target": "0.14",
+            "ctbc_clearance_stair_ratio": "0.90",
+            "ctbc_climb_stair_ratio": "0.75",
+            "ctbc_reward_lift": "2.0",
+            "ctbc_reward_clearance": "1.0",
+            "ctbc_reward_wheel_clearance": "4.0",
+            "ctbc_reward_base_height": "4.0",
+            "ctbc_reward_stair_success": "5.0",
+            "ctbc_hard_stair_threshold": "0.14",
+            "ctbc_hard_stair_fail_penalty": "1.5",
+            "ctbc_reward_forward_progress": "35.0",
+            "ctbc_min_forward_progress": "0.010",
+            "ctbc_reward_stair_forward": "2.0",
+            "ctbc_reward_stair_motion": "4.0",
+            "ctbc_no_progress_penalty": "1.0",
+            "ctbc_reward_height_progress": "30.0",
+            "ctbc_reward_balance_on_stair": "0.7",
+            "ctbc_min_climb_height": "0.015",
+            "ctbc_no_climb_penalty": "0.12",
+            "ctbc_base_imitation": "0.5",
+            "ctbc_non_wheel_contact_penalty": "4.0",
+            "ctbc_command_x_min": "0.35",
+            "ctbc_command_x_max": "0.70",
+            "ctbc_command_y_abs": "0.03",
+            "ctbc_command_yaw_abs": "0.05",
+            "reward_track": "1.2",
+            "reward_upright": "2.0",
+            "reward_action_rate": "0.04",
+            "ppo_total_steps": "1000000",
+            "ppo_num_envs": "32",
+            "ppo_rollout_steps": "512",
+            "ppo_epochs": "4",
+            "ppo_learning_rate": "5e-5",
+            "ppo_domain_randomize": "0.05",
+            "hidden_dim": "256",
+            "seed": "42",
+            "command_min": "-1.0",
+            "command_max": "1.0",
+            "command_mins": self._homing_command_range_csv(env_id, "mins"),
+            "command_maxs": self._homing_command_range_csv(env_id, "maxs"),
+            "checkpoint_path": os.path.join(output_dir, "ctbc_policy_ppo.pt"),
+            "output_path": os.path.join(output_dir, "ctbc_policy.onnx"),
         }
 
     def _ensure_moe_defaults(self):
@@ -624,6 +754,44 @@ class MainWindow(QMainWindow):
             self.homing_settings_by_env[env_id] = self._make_homing_defaults(env_id)
         self.homing_settings = dict(self.homing_settings_by_env[env_id])
 
+    def _ensure_ctbc_defaults(self, env_id=None):
+        env_id = str(env_id or self.env_id_cb.currentText())
+        if env_id not in self.ctbc_settings_by_env:
+            self.ctbc_settings_by_env[env_id] = self._make_ctbc_defaults(env_id)
+        else:
+            settings = dict(self.ctbc_settings_by_env[env_id])
+            defaults = self._make_ctbc_defaults(env_id)
+            old_defaults = {
+                "ctbc_lift_amplitude": {"0.60"},
+                "ctbc_lift_period": {"0.60"},
+                "ctbc_residual_limit": {"0.65", "0.85"},
+                "ctbc_gate_height_threshold": {"0.10"},
+                "ctbc_gate_height_softness": {"0.03"},
+                "ctbc_gate_lift_threshold": {"0.55"},
+                "ctbc_shoulder_gain": {"1.25", "1.60"},
+                "ctbc_leg_gain": {"1.45", "-1.35"},
+                "ctbc_leg_push_gain": {"0.75"},
+                "ctbc_hip_gain": {"0.35", "0.45"},
+                "ctbc_stance_gain": {"0.25"},
+                "ctbc_ff_clip": {"1.0"},
+                "ctbc_reward_wheel_clearance": {"1.5", "2.5"},
+                "ctbc_assist_min": {"0.35"},
+                "ctbc_curriculum_ratio": {"1.0"},
+                "ctbc_select_after_ratio": {"0.65"},
+                "ctbc_clearance_target": {"0.08"},
+                "ctbc_base_height_target": {"0.06"},
+                "ctbc_reward_base_height": {"2.0"},
+                "ppo_total_steps": {"200000"},
+                "ppo_num_envs": {"16"},
+                "ppo_rollout_steps": {"256"},
+                "ppo_domain_randomize": {"0.3"},
+            }
+            for key, value in defaults.items():
+                if key not in settings or str(settings.get(key, "")) in old_defaults.get(key, set()):
+                    settings[key] = value
+            self.ctbc_settings_by_env[env_id] = settings
+        self.ctbc_settings = dict(self.ctbc_settings_by_env[env_id])
+
     def _collect_moe_ui_settings(self, source_settings=None):
         self._ensure_moe_defaults()
         source = dict(source_settings or self.moe_settings)
@@ -633,6 +801,9 @@ class MainWindow(QMainWindow):
             "env_id": env_id,
             "policy_a_path": str(source.get("policy_a_path", "")).strip(),
             "policy_b_path": str(source.get("policy_b_path", "")).strip(),
+            "policy_a_action_scales": str(source.get("policy_a_action_scales", settings.get("policy_a_action_scales", ""))).strip(),
+            "policy_b_action_scales": str(source.get("policy_b_action_scales", settings.get("policy_b_action_scales", ""))).strip(),
+            "output_action_scales": str(source.get("output_action_scales", settings.get("output_action_scales", ""))).strip(),
             "terrains": list(source.get("terrains", settings.get("terrains", []))),
             "samples": str(source.get("samples", settings.get("samples", "200000"))).strip(),
             "rollout_steps": str(source.get("rollout_steps", settings.get("rollout_steps", "1000"))).strip(),
@@ -662,6 +833,9 @@ class MainWindow(QMainWindow):
             "env_id": env_id,
             "policy_a_path": str(source.get("policy_a_path", "")).strip(),
             "policy_b_path": str(source.get("policy_b_path", "")).strip(),
+            "policy_a_action_scales": str(source.get("policy_a_action_scales", settings.get("policy_a_action_scales", ""))).strip(),
+            "policy_b_action_scales": str(source.get("policy_b_action_scales", settings.get("policy_b_action_scales", ""))).strip(),
+            "output_action_scales": str(source.get("output_action_scales", settings.get("output_action_scales", ""))).strip(),
             "output_path": str(source.get("output_path", settings.get("output_path", ""))).strip(),
         })
         self.moe_manual_settings = settings
@@ -719,6 +893,131 @@ class MainWindow(QMainWindow):
         })
         self.homing_settings = settings
         self.homing_settings_by_env[env_id] = dict(settings)
+        return settings
+
+    def _collect_ctbc_ui_settings(self, source_settings=None):
+        source = dict(source_settings or self.ctbc_settings)
+        env_id = str(source.get("env_id", self.env_id_cb.currentText()))
+        self._ensure_ctbc_defaults(env_id)
+        self._ensure_homing_command_ranges_for_env(env_id)
+        settings = dict(self.ctbc_settings)
+        settings.update({
+            "task_mode": "ctbc",
+            "env_id": env_id,
+            "policy_path": str(source.get("policy_path", settings.get("policy_path", ""))).strip(),
+            "checkpoint_path": str(source.get("checkpoint_path", settings.get("checkpoint_path", ""))).strip(),
+            "output_path": str(source.get("output_path", settings.get("output_path", ""))).strip(),
+            "ctbc_terrain": str(source.get("ctbc_terrain", settings.get("ctbc_terrain", "stairs_up_easy"))).strip(),
+            "ctbc_contact_threshold": str(source.get("ctbc_contact_threshold", settings.get("ctbc_contact_threshold", "30.0"))).strip(),
+            "ctbc_contact_window": str(source.get("ctbc_contact_window", settings.get("ctbc_contact_window", "3"))).strip(),
+            "ctbc_lift_amplitude": str(source.get("ctbc_lift_amplitude", settings.get("ctbc_lift_amplitude", "0.90"))).strip(),
+            "ctbc_lift_period": str(source.get("ctbc_lift_period", settings.get("ctbc_lift_period", "0.75"))).strip(),
+            "ctbc_anneal_ratio": str(source.get("ctbc_anneal_ratio", settings.get("ctbc_anneal_ratio", "0.70"))).strip(),
+            "ctbc_episode_steps": str(source.get("ctbc_episode_steps", settings.get("ctbc_episode_steps", "1024"))).strip(),
+            "ctbc_residual_limit": str(source.get("ctbc_residual_limit", settings.get("ctbc_residual_limit", "4.0"))).strip(),
+            "ctbc_gate_height_threshold": str(source.get("ctbc_gate_height_threshold", settings.get("ctbc_gate_height_threshold", "0.06"))).strip(),
+            "ctbc_gate_height_softness": str(source.get("ctbc_gate_height_softness", settings.get("ctbc_gate_height_softness", "0.025"))).strip(),
+            "ctbc_gate_rise": str(source.get("ctbc_gate_rise", settings.get("ctbc_gate_rise", "0.35"))).strip(),
+            "ctbc_gate_fall": str(source.get("ctbc_gate_fall", settings.get("ctbc_gate_fall", "0.08"))).strip(),
+            "ctbc_gate_lift_threshold": str(source.get("ctbc_gate_lift_threshold", settings.get("ctbc_gate_lift_threshold", "0.25"))).strip(),
+            "ctbc_gate_reward_threshold": str(source.get("ctbc_gate_reward_threshold", settings.get("ctbc_gate_reward_threshold", "0.35"))).strip(),
+            "ctbc_assist_trigger_gate": str(source.get("ctbc_assist_trigger_gate", settings.get("ctbc_assist_trigger_gate", "0.12"))).strip(),
+            "ctbc_assist_gate_floor": str(source.get("ctbc_assist_gate_floor", settings.get("ctbc_assist_gate_floor", "0.85"))).strip(),
+            "ctbc_assist_min": str(source.get("ctbc_assist_min", settings.get("ctbc_assist_min", "0.0"))).strip(),
+            "ctbc_gate_residual_runtime": str(source.get("ctbc_gate_residual_runtime", settings.get("ctbc_gate_residual_runtime", "0"))).strip(),
+            "ctbc_anneal_bc_with_assist": str(source.get("ctbc_anneal_bc_with_assist", settings.get("ctbc_anneal_bc_with_assist", "1"))).strip(),
+            "ctbc_distill_primitive": str(source.get("ctbc_distill_primitive", settings.get("ctbc_distill_primitive", "1"))).strip(),
+            "ctbc_bc_weight_min": str(source.get("ctbc_bc_weight_min", settings.get("ctbc_bc_weight_min", "0.15"))).strip(),
+            "ctbc_reflex_only": str(source.get("ctbc_reflex_only", settings.get("ctbc_reflex_only", "1"))).strip(),
+            "ctbc_controller_candidates": str(source.get("ctbc_controller_candidates", settings.get("ctbc_controller_candidates", "64"))).strip(),
+            "ctbc_reflex_samples": str(source.get("ctbc_reflex_samples", settings.get("ctbc_reflex_samples", "8192"))).strip(),
+            "ctbc_reflex_epochs": str(source.get("ctbc_reflex_epochs", settings.get("ctbc_reflex_epochs", "12"))).strip(),
+            "ctbc_reflex_batch": str(source.get("ctbc_reflex_batch", settings.get("ctbc_reflex_batch", "256"))).strip(),
+            "ctbc_reflex_lr": str(source.get("ctbc_reflex_lr", settings.get("ctbc_reflex_lr", "3e-4"))).strip(),
+            "ctbc_reflex_flat_ratio": str(source.get("ctbc_reflex_flat_ratio", settings.get("ctbc_reflex_flat_ratio", "0.35"))).strip(),
+            "ctbc_reflex_gain": str(source.get("ctbc_reflex_gain", settings.get("ctbc_reflex_gain", "1.0"))).strip(),
+            "ctbc_reflex_segment_steps": str(source.get("ctbc_reflex_segment_steps", settings.get("ctbc_reflex_segment_steps", "128"))).strip(),
+            "ctbc_fast_teacher_steps": str(source.get("ctbc_fast_teacher_steps", settings.get("ctbc_fast_teacher_steps", "4096"))).strip(),
+            "ctbc_fast_teacher_epochs": str(source.get("ctbc_fast_teacher_epochs", settings.get("ctbc_fast_teacher_epochs", "6"))).strip(),
+            "ctbc_fast_teacher_batch": str(source.get("ctbc_fast_teacher_batch", settings.get("ctbc_fast_teacher_batch", "256"))).strip(),
+            "ctbc_fast_teacher_lr": str(source.get("ctbc_fast_teacher_lr", settings.get("ctbc_fast_teacher_lr", "2e-4"))).strip(),
+            "ctbc_fast_teacher_gain": str(source.get("ctbc_fast_teacher_gain", settings.get("ctbc_fast_teacher_gain", "1.0"))).strip(),
+            "ctbc_fast_teacher_stair_height": str(source.get("ctbc_fast_teacher_stair_height", settings.get("ctbc_fast_teacher_stair_height", "0.12"))).strip(),
+            "ctbc_safe_tilt": str(source.get("ctbc_safe_tilt", settings.get("ctbc_safe_tilt", "0.22"))).strip(),
+            "ctbc_emergency_tilt": str(source.get("ctbc_emergency_tilt", settings.get("ctbc_emergency_tilt", "0.34"))).strip(),
+            "ctbc_terminate_tilt": str(source.get("ctbc_terminate_tilt", settings.get("ctbc_terminate_tilt", "0.42"))).strip(),
+            "ctbc_tilt_guard_penalty": str(source.get("ctbc_tilt_guard_penalty", settings.get("ctbc_tilt_guard_penalty", "8.0"))).strip(),
+            "ctbc_bad_contact_threshold": str(source.get("ctbc_bad_contact_threshold", settings.get("ctbc_bad_contact_threshold", "1.0"))).strip(),
+            "ctbc_bad_contact_penalty": str(source.get("ctbc_bad_contact_penalty", settings.get("ctbc_bad_contact_penalty", "20.0"))).strip(),
+            "ctbc_lift_cooldown": str(source.get("ctbc_lift_cooldown", settings.get("ctbc_lift_cooldown", "0.35"))).strip(),
+            "ctbc_contact_baseline_alpha": str(source.get("ctbc_contact_baseline_alpha", settings.get("ctbc_contact_baseline_alpha", "0.02"))).strip(),
+            "ctbc_contact_spike_threshold": str(source.get("ctbc_contact_spike_threshold", settings.get("ctbc_contact_spike_threshold", "80.0"))).strip(),
+            "ctbc_force_alternating_lift": str(source.get("ctbc_force_alternating_lift", settings.get("ctbc_force_alternating_lift", "1"))).strip(),
+            "ctbc_curriculum_enabled": str(source.get("ctbc_curriculum_enabled", settings.get("ctbc_curriculum_enabled", "1"))).strip(),
+            "ctbc_stair_height_min": str(source.get("ctbc_stair_height_min", settings.get("ctbc_stair_height_min", "0.025"))).strip(),
+            "ctbc_stair_height_max": str(source.get("ctbc_stair_height_max", settings.get("ctbc_stair_height_max", "0.20"))).strip(),
+            "ctbc_curriculum_ratio": str(source.get("ctbc_curriculum_ratio", settings.get("ctbc_curriculum_ratio", "0.60"))).strip(),
+            "ctbc_select_after_ratio": str(source.get("ctbc_select_after_ratio", settings.get("ctbc_select_after_ratio", "0.70"))).strip(),
+            "ctbc_shoulder_gain": str(source.get("ctbc_shoulder_gain", settings.get("ctbc_shoulder_gain", "0.50"))).strip(),
+            "ctbc_leg_gain": str(source.get("ctbc_leg_gain", settings.get("ctbc_leg_gain", "0.0"))).strip(),
+            "ctbc_leg_push_gain": str(source.get("ctbc_leg_push_gain", settings.get("ctbc_leg_push_gain", "1.75"))).strip(),
+            "ctbc_hip_gain": str(source.get("ctbc_hip_gain", settings.get("ctbc_hip_gain", "0.0"))).strip(),
+            "ctbc_stance_gain": str(source.get("ctbc_stance_gain", settings.get("ctbc_stance_gain", "0.30"))).strip(),
+            "ctbc_wheel_push_gain": str(source.get("ctbc_wheel_push_gain", settings.get("ctbc_wheel_push_gain", "0.0"))).strip(),
+            "ctbc_ff_clip": str(source.get("ctbc_ff_clip", settings.get("ctbc_ff_clip", "4.0"))).strip(),
+            "ctbc_action_clip": str(source.get("ctbc_action_clip", settings.get("ctbc_action_clip", "4.0"))).strip(),
+            "ctbc_compensate_action_scale": str(source.get("ctbc_compensate_action_scale", settings.get("ctbc_compensate_action_scale", "1"))).strip(),
+            "ctbc_clearance_target": str(source.get("ctbc_clearance_target", settings.get("ctbc_clearance_target", "0.14"))).strip(),
+            "ctbc_base_height_target": str(source.get("ctbc_base_height_target", settings.get("ctbc_base_height_target", "0.14"))).strip(),
+            "ctbc_clearance_stair_ratio": str(source.get("ctbc_clearance_stair_ratio", settings.get("ctbc_clearance_stair_ratio", "0.90"))).strip(),
+            "ctbc_climb_stair_ratio": str(source.get("ctbc_climb_stair_ratio", settings.get("ctbc_climb_stair_ratio", "0.75"))).strip(),
+            "ctbc_reward_lift": str(source.get("ctbc_reward_lift", settings.get("ctbc_reward_lift", "2.0"))).strip(),
+            "ctbc_reward_clearance": str(source.get("ctbc_reward_clearance", settings.get("ctbc_reward_clearance", "1.0"))).strip(),
+            "ctbc_reward_wheel_clearance": str(source.get("ctbc_reward_wheel_clearance", settings.get("ctbc_reward_wheel_clearance", "4.0"))).strip(),
+            "ctbc_reward_base_height": str(source.get("ctbc_reward_base_height", settings.get("ctbc_reward_base_height", "4.0"))).strip(),
+            "ctbc_reward_stair_success": str(source.get("ctbc_reward_stair_success", settings.get("ctbc_reward_stair_success", "5.0"))).strip(),
+            "ctbc_hard_stair_threshold": str(source.get("ctbc_hard_stair_threshold", settings.get("ctbc_hard_stair_threshold", "0.14"))).strip(),
+            "ctbc_hard_stair_fail_penalty": str(source.get("ctbc_hard_stair_fail_penalty", settings.get("ctbc_hard_stair_fail_penalty", "1.5"))).strip(),
+            "ctbc_reward_forward_progress": str(source.get("ctbc_reward_forward_progress", settings.get("ctbc_reward_forward_progress", "35.0"))).strip(),
+            "ctbc_min_forward_progress": str(source.get("ctbc_min_forward_progress", settings.get("ctbc_min_forward_progress", "0.010"))).strip(),
+            "ctbc_reward_stair_forward": str(source.get("ctbc_reward_stair_forward", settings.get("ctbc_reward_stair_forward", "2.0"))).strip(),
+            "ctbc_reward_stair_motion": str(source.get("ctbc_reward_stair_motion", settings.get("ctbc_reward_stair_motion", "4.0"))).strip(),
+            "ctbc_no_progress_penalty": str(source.get("ctbc_no_progress_penalty", settings.get("ctbc_no_progress_penalty", "1.0"))).strip(),
+            "ctbc_reward_height_progress": str(source.get("ctbc_reward_height_progress", settings.get("ctbc_reward_height_progress", "30.0"))).strip(),
+            "ctbc_reward_balance_on_stair": str(source.get("ctbc_reward_balance_on_stair", settings.get("ctbc_reward_balance_on_stair", "0.7"))).strip(),
+            "ctbc_min_climb_height": str(source.get("ctbc_min_climb_height", settings.get("ctbc_min_climb_height", "0.015"))).strip(),
+            "ctbc_no_climb_penalty": str(source.get("ctbc_no_climb_penalty", settings.get("ctbc_no_climb_penalty", "0.12"))).strip(),
+            "ctbc_base_imitation": str(source.get("ctbc_base_imitation", settings.get("ctbc_base_imitation", "0.5"))).strip(),
+            "ctbc_non_wheel_contact_penalty": str(source.get("ctbc_non_wheel_contact_penalty", settings.get("ctbc_non_wheel_contact_penalty", "4.0"))).strip(),
+            "ctbc_command_x_min": str(source.get("ctbc_command_x_min", settings.get("ctbc_command_x_min", "0.35"))).strip(),
+            "ctbc_command_x_max": str(source.get("ctbc_command_x_max", settings.get("ctbc_command_x_max", "0.70"))).strip(),
+            "ctbc_command_y_abs": str(source.get("ctbc_command_y_abs", settings.get("ctbc_command_y_abs", "0.03"))).strip(),
+            "ctbc_command_yaw_abs": str(source.get("ctbc_command_yaw_abs", settings.get("ctbc_command_yaw_abs", "0.05"))).strip(),
+            "reward_track": str(source.get("reward_track", settings.get("reward_track", "1.2"))).strip(),
+            "reward_upright": str(source.get("reward_upright", settings.get("reward_upright", "2.0"))).strip(),
+            "reward_action_rate": str(source.get("reward_action_rate", settings.get("reward_action_rate", "0.04"))).strip(),
+            "ppo_total_steps": str(source.get("ppo_total_steps", settings.get("ppo_total_steps", "1000000"))).strip(),
+            "ppo_num_envs": str(source.get("ppo_num_envs", settings.get("ppo_num_envs", "32"))).strip(),
+            "ppo_rollout_steps": str(source.get("ppo_rollout_steps", settings.get("ppo_rollout_steps", "512"))).strip(),
+            "ppo_epochs": str(source.get("ppo_epochs", settings.get("ppo_epochs", "4"))).strip(),
+            "ppo_learning_rate": str(source.get("ppo_learning_rate", settings.get("ppo_learning_rate", "5e-5"))).strip(),
+            "ppo_domain_randomize": str(source.get("ppo_domain_randomize", settings.get("ppo_domain_randomize", "0.05"))).strip(),
+            "hidden_dim": str(source.get("hidden_dim", settings.get("hidden_dim", "256"))).strip(),
+            "seed": str(source.get("seed", settings.get("seed", "42"))).strip(),
+            "command_min": str(source.get("command_min", settings.get("command_min", "-1.0"))).strip(),
+            "command_max": str(source.get("command_max", settings.get("command_max", "1.0"))).strip(),
+            "command_mins": self._homing_command_range_csv(env_id, "mins"),
+            "command_maxs": self._homing_command_range_csv(env_id, "maxs"),
+        })
+        if not settings.get("ctbc_terrain"):
+            settings["ctbc_terrain"] = "stairs_up_easy"
+        try:
+            if float(settings.get("ctbc_reward_forward_progress", 35.0)) <= 8.0:
+                settings["ctbc_reward_forward_progress"] = "35.0"
+        except Exception:
+            settings["ctbc_reward_forward_progress"] = "35.0"
+        self.ctbc_settings = settings
+        self.ctbc_settings_by_env[env_id] = dict(settings)
         return settings
 
     def _moe_dataset_root(self, env_id: str):
@@ -815,6 +1114,20 @@ class MainWindow(QMainWindow):
         if self._homing_last_summary:
             self.homing_dialog.set_status(f"last: {self._homing_last_summary.get('samples', self._homing_last_summary.get('onnx_path', 'done'))}")
 
+    def _refresh_ctbc_dialog(self):
+        if self.ctbc_dialog is None:
+            return
+        dialog_env = self.ctbc_dialog.get_settings().get("env_id", "") if self.ctbc_dialog is not None else ""
+        self._ensure_ctbc_defaults(dialog_env or self.env_id_cb.currentText())
+        settings = self.ctbc_settings
+        env_id = settings.get("env_id", self.env_id_cb.currentText())
+        self.ctbc_dialog.set_settings(settings)
+        self.ctbc_dialog.set_available_datasets([], [])
+        running = self.ctbc_thread is not None and self.ctbc_thread.isRunning()
+        self.ctbc_dialog.set_running(running)
+        if self._homing_last_summary and self._homing_last_summary.get("mode") == "ctbc_fine_tune":
+            self.ctbc_dialog.set_status(f"last: {self._homing_last_summary.get('onnx_path', 'done')}")
+
     def _on_homing_env_changed(self, previous_env_id, new_env_id):
         if self.homing_dialog is not None and previous_env_id:
             previous_settings = self.homing_dialog.get_settings()
@@ -822,6 +1135,14 @@ class MainWindow(QMainWindow):
             self._collect_homing_ui_settings(previous_settings)
         self._ensure_homing_defaults(str(new_env_id))
         self._refresh_homing_dialog()
+
+    def _on_ctbc_env_changed(self, previous_env_id, new_env_id):
+        if self.ctbc_dialog is not None and previous_env_id:
+            previous_settings = self.ctbc_dialog.get_settings()
+            previous_settings["env_id"] = str(previous_env_id)
+            self._collect_ctbc_ui_settings(previous_settings)
+        self._ensure_ctbc_defaults(str(new_env_id))
+        self._refresh_ctbc_dialog()
 
     def _refresh_vision_train_dialog(self):
         if self.vision_train_dialog is None:
@@ -896,7 +1217,7 @@ class MainWindow(QMainWindow):
 
     def _make_initial_pose_defaults(self, env_id: str):
         env_cfg = self.env_config.get(env_id, {}) or {}
-        raw = env_cfg.get("initial_positions", {}) or {}
+        raw = env_cfg.get("joint_offsets", {}) or {}
         joint_defaults = get_default_initial_joint_map(env_id)
         joints_raw = raw.get("joints", raw) if isinstance(raw, dict) else {}
         if isinstance(joints_raw, dict):
@@ -997,9 +1318,15 @@ class MainWindow(QMainWindow):
 
     def _make_homing_command_range_defaults(self, env_id: str):
         cmd_dim = self._command_dim_for_env(env_id)
+        mins = ["-1.0"] * cmd_dim
+        maxs = ["1.0"] * cmd_dim
+        for index in (1, 3):
+            if index < cmd_dim:
+                mins[index] = "0.0"
+                maxs[index] = "0.0"
         return {
-            "mins": ["-1.0"] * cmd_dim,
-            "maxs": ["1.0"] * cmd_dim,
+            "mins": mins,
+            "maxs": maxs,
         }
 
     def _ensure_homing_command_ranges_for_env(self, env_id: str):
@@ -1013,6 +1340,10 @@ class MainWindow(QMainWindow):
             mins.append("-1.0")
         while len(maxs) < cmd_dim:
             maxs.append("1.0")
+        for index in (1, 3):
+            if index < cmd_dim and str(mins[index]) == "-1.0" and str(maxs[index]) == "1.0":
+                mins[index] = "0.0"
+                maxs[index] = "0.0"
         self.homing_command_ranges_by_env[env_id] = {
             "mins": [str(value) for value in mins[:cmd_dim]],
             "maxs": [str(value) for value in maxs[:cmd_dim]],
@@ -1645,6 +1976,12 @@ class MainWindow(QMainWindow):
             and hasattr(self.homing_worker, "update_command_values")
         ):
             self.homing_worker.update_command_values(self.current_command_values)
+        if (
+            self.ctbc_worker is not None
+            and self.ctbc_worker_mode == "test_policy"
+            and hasattr(self.ctbc_worker, "update_command_values")
+        ):
+            self.ctbc_worker.update_command_values(self.current_command_values)
 
     def _start_homing_command_timer(self):
         self._stop_homing_command_timer()
@@ -1848,9 +2185,9 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self.open_hardware_settings)
         env_layout.addRow("Hardware:", settings_btn)
 
-        initial_pose_btn = QPushButton("Initial Pose Settings")
+        initial_pose_btn = QPushButton("Joint Offset Settings")
         initial_pose_btn.clicked.connect(self.open_initial_pose_settings)
-        env_layout.addRow("Initial Pose:", initial_pose_btn)
+        env_layout.addRow("Joint Offset:", initial_pose_btn)
 
         obs_settings_btn = QPushButton("Observation Settings")
         obs_settings_btn.clicked.connect(self.open_observation_settings)
@@ -2966,12 +3303,30 @@ class MainWindow(QMainWindow):
         self.homing_dialog.raise_()
         self.homing_dialog.activateWindow()
 
+    def open_ctbc_train_dialog(self):
+        self._ensure_ctbc_defaults()
+        if self.ctbc_dialog is None:
+            self.ctbc_dialog = CtbcTrainDialog(self.env_config.keys(), self._terrain_ids(), self)
+            self.ctbc_dialog.rlTrainRequested.connect(self.rl_fine_tune_ctbc_policy)
+            self.ctbc_dialog.refreshRequested.connect(self._refresh_ctbc_dialog)
+            self.ctbc_dialog.stopRequested.connect(self.stop_ctbc_job)
+            self.ctbc_dialog.testPolicyRequested.connect(self.test_ctbc_export_policy)
+            self.ctbc_dialog.testPrimitiveRequested.connect(self.test_ctbc_primitive)
+            self.ctbc_dialog.envChanged.connect(self._on_ctbc_env_changed)
+            self.ctbc_dialog.set_settings(self.ctbc_settings)
+        self._refresh_ctbc_dialog()
+        self.ctbc_dialog.show()
+        self.ctbc_dialog.raise_()
+        self.ctbc_dialog.activateWindow()
+
     def _start_homing_worker(self, mode, settings):
         if self.homing_thread is not None and self.homing_thread.isRunning():
             QMessageBox.warning(self, "Homing Training", "A Homing job is already running.")
             return False
         if self.homing_dialog is not None:
             self.homing_dialog.set_running(True)
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_running(True)
         self.homing_worker_mode = mode
         self.homing_thread = QThread()
         self.homing_worker = HomingWorker(self._repo_root(), settings, mode)
@@ -2987,6 +3342,29 @@ class MainWindow(QMainWindow):
         self.homing_thread.finished.connect(self._on_homing_thread_finished)
         self.homing_thread.finished.connect(self.homing_thread.deleteLater)
         self.homing_thread.start()
+        return True
+
+    def _start_ctbc_worker(self, mode, settings):
+        if self.ctbc_thread is not None and self.ctbc_thread.isRunning():
+            QMessageBox.warning(self, "CTBC Stair Reflex", "A CTBC job is already running.")
+            return False
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_running(True)
+        self.ctbc_worker_mode = mode
+        self.ctbc_thread = QThread()
+        self.ctbc_worker = CtbcWorker(self._repo_root(), settings, mode)
+        self.ctbc_worker.moveToThread(self.ctbc_thread)
+        self.ctbc_thread.started.connect(self.ctbc_worker.run)
+        self.ctbc_worker.log.connect(self.on_ctbc_log)
+        self.ctbc_worker.finished.connect(self.on_ctbc_finished)
+        self.ctbc_worker.error.connect(self.on_ctbc_error)
+        self.ctbc_worker.finished.connect(self.ctbc_thread.quit)
+        self.ctbc_worker.error.connect(self.ctbc_thread.quit)
+        self.ctbc_worker.finished.connect(self.ctbc_worker.deleteLater)
+        self.ctbc_worker.error.connect(self.ctbc_worker.deleteLater)
+        self.ctbc_thread.finished.connect(self._on_ctbc_thread_finished)
+        self.ctbc_thread.finished.connect(self.ctbc_thread.deleteLater)
+        self.ctbc_thread.start()
         return True
 
     def _homing_env_overrides(self, env_id):
@@ -3011,7 +3389,7 @@ class MainWindow(QMainWindow):
         initial_pose = self.initial_pose_settings_by_env.get(env_id)
         if initial_pose is None:
             initial_pose = self._make_initial_pose_defaults(env_id)
-        initial_positions = {
+        joint_offsets = {
             "joints": {
                 joint_name: to_float(value, 0.0)
                 for joint_name, value in dict(initial_pose.get("joints", {})).items()
@@ -3023,7 +3401,7 @@ class MainWindow(QMainWindow):
             "action_scales": [to_float(value, 1.0) for value in list(action_scales or [])],
             "action_clippings": [dict(item) for item in list(action_clippings or [])],
             "actuator": dict(actuator or {}),
-            "initial_positions": initial_positions,
+            "joint_offsets": joint_offsets,
             "random": {
                 "precision": self.precision_cb.currentText(),
                 "sensor_noise": self.sensor_noise_cb.currentText(),
@@ -3180,6 +3558,185 @@ class MainWindow(QMainWindow):
             "env_overrides": self._homing_env_overrides(settings.get("env_id")),
         })
 
+    def rl_fine_tune_ctbc_policy(self):
+        dialog_settings = self.ctbc_dialog.get_settings() if self.ctbc_dialog is not None else None
+        settings = self._collect_ctbc_ui_settings(dialog_settings)
+        if not os.path.isfile(settings.get("policy_path", "")):
+            QMessageBox.warning(self, "CTBC Stair Reflex", "Select a valid base ONNX policy.")
+            return
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.clear_log()
+            self.ctbc_dialog.set_status("tuning stair controller")
+        self._start_ctbc_worker("tune_controller", {
+            **settings,
+            "rollout_steps": to_int(settings.get("rollout_steps", 1000), 1000),
+            "ppo_total_steps": to_int(settings.get("ppo_total_steps", 1000000), 1000000),
+            "ppo_num_envs": to_int(settings.get("ppo_num_envs", 32), 32),
+            "ppo_rollout_steps": to_int(settings.get("ppo_rollout_steps", 512), 512),
+            "ppo_epochs": to_int(settings.get("ppo_epochs", 4), 4),
+            "ppo_learning_rate": to_float(settings.get("ppo_learning_rate", 5e-5), 5e-5),
+            "ppo_domain_randomize": to_float(settings.get("ppo_domain_randomize", 0.05), 0.05),
+            "ppo_supervised_init": False,
+            "ppo_use_trajectory_reward": True,
+            "ppo_mask_wheel_actions": False,
+            "reward_track": to_float(settings.get("reward_track", 1.2), 1.2),
+            "reward_upright": to_float(settings.get("reward_upright", 2.0), 2.0),
+            "reward_action_rate": to_float(settings.get("reward_action_rate", 0.04), 0.04),
+            "ctbc_contact_threshold": to_float(settings.get("ctbc_contact_threshold", 30.0), 30.0),
+            "ctbc_contact_window": to_int(settings.get("ctbc_contact_window", 3), 3),
+            "ctbc_lift_amplitude": to_float(settings.get("ctbc_lift_amplitude", 0.90), 0.90),
+            "ctbc_lift_period": to_float(settings.get("ctbc_lift_period", 0.75), 0.75),
+            "ctbc_anneal_ratio": to_float(settings.get("ctbc_anneal_ratio", 0.70), 0.70),
+            "ctbc_episode_steps": to_int(settings.get("ctbc_episode_steps", 1024), 1024),
+            "ctbc_residual_limit": to_float(settings.get("ctbc_residual_limit", 4.0), 4.0),
+            "ctbc_gate_height_threshold": to_float(settings.get("ctbc_gate_height_threshold", 0.06), 0.06),
+            "ctbc_gate_height_softness": to_float(settings.get("ctbc_gate_height_softness", 0.025), 0.025),
+            "ctbc_gate_rise": to_float(settings.get("ctbc_gate_rise", 0.35), 0.35),
+            "ctbc_gate_fall": to_float(settings.get("ctbc_gate_fall", 0.08), 0.08),
+            "ctbc_gate_lift_threshold": to_float(settings.get("ctbc_gate_lift_threshold", 0.25), 0.25),
+            "ctbc_gate_reward_threshold": to_float(settings.get("ctbc_gate_reward_threshold", 0.35), 0.35),
+            "ctbc_assist_trigger_gate": to_float(settings.get("ctbc_assist_trigger_gate", 0.12), 0.12),
+            "ctbc_assist_gate_floor": to_float(settings.get("ctbc_assist_gate_floor", 0.85), 0.85),
+            "ctbc_assist_min": to_float(settings.get("ctbc_assist_min", 0.0), 0.0),
+            "ctbc_gate_residual_runtime": str(settings.get("ctbc_gate_residual_runtime", "0")),
+            "ctbc_anneal_bc_with_assist": str(settings.get("ctbc_anneal_bc_with_assist", "1")),
+            "ctbc_distill_primitive": str(settings.get("ctbc_distill_primitive", "1")),
+            "ctbc_bc_weight_min": to_float(settings.get("ctbc_bc_weight_min", 0.15), 0.15),
+            "ctbc_reflex_only": str(settings.get("ctbc_reflex_only", "1")),
+            "ctbc_controller_candidates": to_int(settings.get("ctbc_controller_candidates", 64), 64),
+            "ctbc_reflex_samples": to_int(settings.get("ctbc_reflex_samples", 8192), 8192),
+            "ctbc_reflex_epochs": to_int(settings.get("ctbc_reflex_epochs", 12), 12),
+            "ctbc_reflex_batch": to_int(settings.get("ctbc_reflex_batch", 256), 256),
+            "ctbc_reflex_lr": to_float(settings.get("ctbc_reflex_lr", 3e-4), 3e-4),
+            "ctbc_reflex_flat_ratio": to_float(settings.get("ctbc_reflex_flat_ratio", 0.35), 0.35),
+            "ctbc_reflex_gain": to_float(settings.get("ctbc_reflex_gain", 1.0), 1.0),
+            "ctbc_reflex_segment_steps": to_int(settings.get("ctbc_reflex_segment_steps", 128), 128),
+            "ctbc_fast_teacher_steps": to_int(settings.get("ctbc_fast_teacher_steps", 4096), 4096),
+            "ctbc_fast_teacher_epochs": to_int(settings.get("ctbc_fast_teacher_epochs", 6), 6),
+            "ctbc_fast_teacher_batch": to_int(settings.get("ctbc_fast_teacher_batch", 256), 256),
+            "ctbc_fast_teacher_lr": to_float(settings.get("ctbc_fast_teacher_lr", 2e-4), 2e-4),
+            "ctbc_fast_teacher_gain": to_float(settings.get("ctbc_fast_teacher_gain", 1.0), 1.0),
+            "ctbc_fast_teacher_stair_height": to_float(settings.get("ctbc_fast_teacher_stair_height", 0.12), 0.12),
+            "ctbc_safe_tilt": to_float(settings.get("ctbc_safe_tilt", 0.22), 0.22),
+            "ctbc_emergency_tilt": to_float(settings.get("ctbc_emergency_tilt", 0.34), 0.34),
+            "ctbc_terminate_tilt": to_float(settings.get("ctbc_terminate_tilt", 0.42), 0.42),
+            "ctbc_tilt_guard_penalty": to_float(settings.get("ctbc_tilt_guard_penalty", 8.0), 8.0),
+            "ctbc_bad_contact_threshold": to_float(settings.get("ctbc_bad_contact_threshold", 1.0), 1.0),
+            "ctbc_bad_contact_penalty": to_float(settings.get("ctbc_bad_contact_penalty", 20.0), 20.0),
+            "ctbc_lift_cooldown": to_float(settings.get("ctbc_lift_cooldown", 0.35), 0.35),
+            "ctbc_contact_baseline_alpha": to_float(settings.get("ctbc_contact_baseline_alpha", 0.02), 0.02),
+            "ctbc_contact_spike_threshold": to_float(settings.get("ctbc_contact_spike_threshold", 80.0), 80.0),
+            "ctbc_force_alternating_lift": str(settings.get("ctbc_force_alternating_lift", "1")),
+            "ctbc_curriculum_enabled": str(settings.get("ctbc_curriculum_enabled", "1")),
+            "ctbc_stair_height_min": to_float(settings.get("ctbc_stair_height_min", 0.025), 0.025),
+            "ctbc_stair_height_max": to_float(settings.get("ctbc_stair_height_max", 0.20), 0.20),
+            "ctbc_curriculum_ratio": to_float(settings.get("ctbc_curriculum_ratio", 0.60), 0.60),
+            "ctbc_select_after_ratio": to_float(settings.get("ctbc_select_after_ratio", 0.70), 0.70),
+            "ctbc_shoulder_gain": to_float(settings.get("ctbc_shoulder_gain", 0.50), 0.50),
+            "ctbc_leg_gain": to_float(settings.get("ctbc_leg_gain", 0.0), 0.0),
+            "ctbc_leg_push_gain": to_float(settings.get("ctbc_leg_push_gain", 1.75), 1.75),
+            "ctbc_hip_gain": to_float(settings.get("ctbc_hip_gain", 0.0), 0.0),
+            "ctbc_stance_gain": to_float(settings.get("ctbc_stance_gain", 0.30), 0.30),
+            "ctbc_wheel_push_gain": to_float(settings.get("ctbc_wheel_push_gain", 0.0), 0.0),
+            "ctbc_ff_clip": to_float(settings.get("ctbc_ff_clip", 4.0), 4.0),
+            "ctbc_action_clip": to_float(settings.get("ctbc_action_clip", 4.0), 4.0),
+            "ctbc_compensate_action_scale": str(settings.get("ctbc_compensate_action_scale", "1")),
+            "ctbc_clearance_target": to_float(settings.get("ctbc_clearance_target", 0.14), 0.14),
+            "ctbc_base_height_target": to_float(settings.get("ctbc_base_height_target", 0.14), 0.14),
+            "ctbc_clearance_stair_ratio": to_float(settings.get("ctbc_clearance_stair_ratio", 0.90), 0.90),
+            "ctbc_climb_stair_ratio": to_float(settings.get("ctbc_climb_stair_ratio", 0.75), 0.75),
+            "ctbc_reward_lift": to_float(settings.get("ctbc_reward_lift", 2.0), 2.0),
+            "ctbc_reward_clearance": to_float(settings.get("ctbc_reward_clearance", 1.0), 1.0),
+            "ctbc_reward_wheel_clearance": to_float(settings.get("ctbc_reward_wheel_clearance", 4.0), 4.0),
+            "ctbc_reward_base_height": to_float(settings.get("ctbc_reward_base_height", 4.0), 4.0),
+            "ctbc_reward_stair_success": to_float(settings.get("ctbc_reward_stair_success", 5.0), 5.0),
+            "ctbc_hard_stair_threshold": to_float(settings.get("ctbc_hard_stair_threshold", 0.14), 0.14),
+            "ctbc_hard_stair_fail_penalty": to_float(settings.get("ctbc_hard_stair_fail_penalty", 1.5), 1.5),
+            "ctbc_reward_forward_progress": to_float(settings.get("ctbc_reward_forward_progress", 35.0), 35.0),
+            "ctbc_min_forward_progress": to_float(settings.get("ctbc_min_forward_progress", 0.010), 0.010),
+            "ctbc_reward_stair_forward": to_float(settings.get("ctbc_reward_stair_forward", 2.0), 2.0),
+            "ctbc_reward_stair_motion": to_float(settings.get("ctbc_reward_stair_motion", 4.0), 4.0),
+            "ctbc_no_progress_penalty": to_float(settings.get("ctbc_no_progress_penalty", 1.0), 1.0),
+            "ctbc_reward_height_progress": to_float(settings.get("ctbc_reward_height_progress", 30.0), 30.0),
+            "ctbc_reward_balance_on_stair": to_float(settings.get("ctbc_reward_balance_on_stair", 0.7), 0.7),
+            "ctbc_min_climb_height": to_float(settings.get("ctbc_min_climb_height", 0.015), 0.015),
+            "ctbc_no_climb_penalty": to_float(settings.get("ctbc_no_climb_penalty", 0.12), 0.12),
+            "ctbc_base_imitation": to_float(settings.get("ctbc_base_imitation", 0.5), 0.5),
+            "ctbc_non_wheel_contact_penalty": to_float(settings.get("ctbc_non_wheel_contact_penalty", 4.0), 4.0),
+            "ctbc_command_x_min": to_float(settings.get("ctbc_command_x_min", 0.35), 0.35),
+            "ctbc_command_x_max": to_float(settings.get("ctbc_command_x_max", 0.70), 0.70),
+            "ctbc_command_y_abs": to_float(settings.get("ctbc_command_y_abs", 0.03), 0.03),
+            "ctbc_command_yaw_abs": to_float(settings.get("ctbc_command_yaw_abs", 0.05), 0.05),
+            "hidden_dim": to_int(settings.get("hidden_dim", 256), 256),
+            "seed": to_int(settings.get("seed", 42), 42),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def test_ctbc_export_policy(self):
+        settings = self._collect_ctbc_ui_settings(self.ctbc_dialog.get_settings() if self.ctbc_dialog is not None else None)
+        if not os.path.isfile(settings.get("policy_path", "")):
+            QMessageBox.warning(self, "CTBC Stair Reflex", "Select a valid base ONNX policy.")
+            return
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_status("testing stair controller")
+            self.ctbc_dialog.append_log("[ctbc-controller-test] launching render test with base ONNX + deterministic controller.\n")
+        self._start_homing_command_timer()
+        self._start_ctbc_worker("test_controller", {
+            **settings,
+            "test_steps": to_int(settings.get("ctbc_episode_steps", 1000), 1000),
+            "ctbc_residual_limit": to_float(settings.get("ctbc_residual_limit", 4.0), 4.0),
+            "ctbc_gate_height_threshold": to_float(settings.get("ctbc_gate_height_threshold", 0.06), 0.06),
+            "ctbc_gate_height_softness": to_float(settings.get("ctbc_gate_height_softness", 0.025), 0.025),
+            "ctbc_gate_rise": to_float(settings.get("ctbc_gate_rise", 0.35), 0.35),
+            "ctbc_gate_fall": to_float(settings.get("ctbc_gate_fall", 0.08), 0.08),
+            "ctbc_gate_lift_threshold": to_float(settings.get("ctbc_gate_lift_threshold", 0.25), 0.25),
+            "ctbc_gate_reward_threshold": to_float(settings.get("ctbc_gate_reward_threshold", 0.35), 0.35),
+            "ctbc_assist_trigger_gate": to_float(settings.get("ctbc_assist_trigger_gate", 0.12), 0.12),
+            "ctbc_assist_gate_floor": to_float(settings.get("ctbc_assist_gate_floor", 0.85), 0.85),
+            "ctbc_assist_min": to_float(settings.get("ctbc_assist_min", 0.0), 0.0),
+            "ctbc_safe_tilt": to_float(settings.get("ctbc_safe_tilt", 0.22), 0.22),
+            "ctbc_emergency_tilt": to_float(settings.get("ctbc_emergency_tilt", 0.34), 0.34),
+            "ctbc_terminate_tilt": to_float(settings.get("ctbc_terminate_tilt", 0.42), 0.42),
+            "ctbc_tilt_guard_penalty": to_float(settings.get("ctbc_tilt_guard_penalty", 8.0), 8.0),
+            "ctbc_lift_cooldown": to_float(settings.get("ctbc_lift_cooldown", 0.35), 0.35),
+            "ctbc_contact_baseline_alpha": to_float(settings.get("ctbc_contact_baseline_alpha", 0.02), 0.02),
+            "ctbc_contact_spike_threshold": to_float(settings.get("ctbc_contact_spike_threshold", 80.0), 80.0),
+            "ctbc_shoulder_gain": to_float(settings.get("ctbc_shoulder_gain", 0.50), 0.50),
+            "ctbc_leg_gain": to_float(settings.get("ctbc_leg_gain", 0.0), 0.0),
+            "ctbc_leg_push_gain": to_float(settings.get("ctbc_leg_push_gain", 1.75), 1.75),
+            "ctbc_hip_gain": to_float(settings.get("ctbc_hip_gain", 0.0), 0.0),
+            "ctbc_stance_gain": to_float(settings.get("ctbc_stance_gain", 0.30), 0.30),
+            "ctbc_ff_clip": to_float(settings.get("ctbc_ff_clip", 4.0), 4.0),
+            "ctbc_action_clip": to_float(settings.get("ctbc_action_clip", 4.0), 4.0),
+            "ctbc_compensate_action_scale": str(settings.get("ctbc_compensate_action_scale", "1")),
+            "ctbc_clearance_target": to_float(settings.get("ctbc_clearance_target", 0.08), 0.08),
+            "ctbc_base_height_target": to_float(settings.get("ctbc_base_height_target", 0.06), 0.06),
+            "command_values": list(self.current_command_values),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
+    def test_ctbc_primitive(self):
+        settings = self._collect_ctbc_ui_settings(self.ctbc_dialog.get_settings() if self.ctbc_dialog is not None else None)
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_status("testing ctbc primitive")
+            self.ctbc_dialog.append_log("[ctbc-primitive-test] launching render test with gravity off and frozen base.\n")
+        self._start_ctbc_worker("test_primitive", {
+            **settings,
+            "test_steps": to_int(settings.get("ctbc_episode_steps", 1200), 1200),
+            "ctbc_lift_amplitude": to_float(settings.get("ctbc_lift_amplitude", 0.90), 0.90),
+            "ctbc_lift_period": to_float(settings.get("ctbc_lift_period", 0.75), 0.75),
+            "ctbc_lift_cooldown": to_float(settings.get("ctbc_lift_cooldown", 0.35), 0.35),
+            "ctbc_shoulder_gain": to_float(settings.get("ctbc_shoulder_gain", 0.50), 0.50),
+            "ctbc_leg_gain": to_float(settings.get("ctbc_leg_gain", 0.0), 0.0),
+            "ctbc_leg_push_gain": to_float(settings.get("ctbc_leg_push_gain", 1.75), 1.75),
+            "ctbc_hip_gain": to_float(settings.get("ctbc_hip_gain", 0.0), 0.0),
+            "ctbc_stance_gain": to_float(settings.get("ctbc_stance_gain", 0.30), 0.30),
+            "ctbc_ff_clip": to_float(settings.get("ctbc_ff_clip", 4.0), 4.0),
+            "ctbc_action_clip": to_float(settings.get("ctbc_action_clip", 4.0), 4.0),
+            "ctbc_compensate_action_scale": str(settings.get("ctbc_compensate_action_scale", "1")),
+            "env_overrides": self._homing_env_overrides(settings.get("env_id")),
+        })
+
     def export_homing_onnx(self):
         settings = self._collect_homing_ui_settings(self.homing_dialog.get_settings() if self.homing_dialog is not None else None)
         env_id = settings.get("env_id", self.env_id_cb.currentText())
@@ -3205,6 +3762,21 @@ class MainWindow(QMainWindow):
             "env_overrides": self._homing_env_overrides(env_id),
         })
 
+    def export_ctbc_onnx(self):
+        settings = self._collect_ctbc_ui_settings(self.ctbc_dialog.get_settings() if self.ctbc_dialog is not None else None)
+        env_id = settings.get("env_id", self.env_id_cb.currentText())
+        default_dir = os.path.join(self._repo_root(), "envs", env_id, "weights", "ctbc", "latest")
+        checkpoint_path = settings.get("checkpoint_path") or os.path.join(default_dir, "ctbc_policy_ppo.pt")
+        output_path = settings.get("output_path") or os.path.join(default_dir, "ctbc_policy.onnx")
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_status("exporting")
+        self._start_ctbc_worker("export", {
+            **settings,
+            "checkpoint_path": checkpoint_path,
+            "output_path": output_path,
+            "env_overrides": self._homing_env_overrides(env_id),
+        })
+
     def on_homing_log(self, message):
         if self.homing_dialog is not None:
             self.homing_dialog.append_log(message)
@@ -3216,6 +3788,18 @@ class MainWindow(QMainWindow):
         if self.homing_dialog is not None:
             self.homing_dialog.append_log("[homing] stop requested by user.\n")
             self.homing_dialog.set_status("stopping")
+
+    def on_ctbc_log(self, message):
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.append_log(message)
+
+    def stop_ctbc_job(self):
+        self._stop_homing_command_timer()
+        if self.ctbc_worker is not None:
+            self.ctbc_worker.request_stop()
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.append_log("[ctbc] stop requested by user.\n")
+            self.ctbc_dialog.set_status("stopping")
 
     def on_homing_finished(self, summary):
         self._stop_homing_command_timer()
@@ -3234,6 +3818,29 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Homing Training", "Homing job finished.")
 
+    def on_ctbc_finished(self, summary):
+        self._stop_homing_command_timer()
+        self._homing_last_summary = dict(summary or {})
+        env_id = self._homing_last_summary.get("env_id", self.ctbc_settings.get("env_id", self.env_id_cb.currentText()))
+        self._homing_last_summary_by_env[env_id] = dict(self._homing_last_summary)
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_running(False)
+            self.ctbc_dialog.set_status("done")
+        if self._homing_last_summary.get("checkpoint_path"):
+            self.ctbc_settings["checkpoint_path"] = str(self._homing_last_summary.get("checkpoint_path"))
+        if self._homing_last_summary.get("onnx_path"):
+            self.ctbc_settings["output_path"] = str(self._homing_last_summary.get("onnx_path"))
+        selected = self._homing_last_summary.get("selected_metrics", {})
+        if isinstance(selected, dict) and isinstance(selected.get("params", None), dict):
+            for key, value in selected["params"].items():
+                self.ctbc_settings[str(key)] = str(value)
+        self.ctbc_settings_by_env[env_id] = dict(self.ctbc_settings)
+        self._refresh_ctbc_dialog()
+        if self._homing_last_summary.get("stopped", False):
+            QMessageBox.information(self, "CTBC Stair Reflex", "CTBC job stopped.")
+        else:
+            QMessageBox.information(self, "CTBC Stair Reflex", "CTBC job finished.")
+
     def on_homing_error(self, error_msg):
         self._stop_homing_command_timer()
         if self.homing_dialog is not None:
@@ -3242,6 +3849,14 @@ class MainWindow(QMainWindow):
             self.homing_dialog.set_status("error")
         QMessageBox.critical(self, "Homing Training", error_msg)
 
+    def on_ctbc_error(self, error_msg):
+        self._stop_homing_command_timer()
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_running(False)
+            self.ctbc_dialog.append_log(f"[ctbc] ERROR: {error_msg}\n")
+            self.ctbc_dialog.set_status("error")
+        QMessageBox.critical(self, "CTBC Stair Reflex", error_msg)
+
     def _on_homing_thread_finished(self):
         self._stop_homing_command_timer()
         self.homing_thread = None
@@ -3249,6 +3864,14 @@ class MainWindow(QMainWindow):
         self.homing_worker_mode = None
         if self.homing_dialog is not None:
             self.homing_dialog.set_running(False)
+
+    def _on_ctbc_thread_finished(self):
+        self._stop_homing_command_timer()
+        self.ctbc_thread = None
+        self.ctbc_worker = None
+        self.ctbc_worker_mode = None
+        if self.ctbc_dialog is not None:
+            self.ctbc_dialog.set_running(False)
 
     def open_hardware_settings(self):
         env_id = self.env_id_cb.currentText()
@@ -3340,6 +3963,29 @@ class MainWindow(QMainWindow):
                 self.homing_settings["command_max"] = str(maxs[0])
             self.homing_settings_by_env[env_id] = dict(self.homing_settings)
             self._refresh_homing_dialog()
+
+    def open_ctbc_command_range_settings(self):
+        env_id = self.ctbc_dialog.get_settings().get("env_id", self.env_id_cb.currentText()) if self.ctbc_dialog is not None else self.env_id_cb.currentText()
+        self._ensure_homing_command_ranges_for_env(env_id)
+        dialog = CommandRangeSettingsDialog(dict(self.homing_command_ranges_by_env.get(env_id, {})), self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.homing_command_ranges = dialog.get_settings()
+            self.homing_command_ranges_by_env[env_id] = {
+                "mins": list((self.homing_command_ranges).get("mins", [])),
+                "maxs": list((self.homing_command_ranges).get("maxs", [])),
+            }
+            self._ensure_homing_command_ranges_for_env(env_id)
+            self._ensure_ctbc_defaults(env_id)
+            self.ctbc_settings["command_mins"] = self._homing_command_range_csv(env_id, "mins")
+            self.ctbc_settings["command_maxs"] = self._homing_command_range_csv(env_id, "maxs")
+            mins = self.homing_command_ranges_by_env[env_id]["mins"]
+            maxs = self.homing_command_ranges_by_env[env_id]["maxs"]
+            if mins:
+                self.ctbc_settings["command_min"] = str(mins[0])
+            if maxs:
+                self.ctbc_settings["command_max"] = str(maxs[0])
+            self.ctbc_settings_by_env[env_id] = dict(self.ctbc_settings)
+            self._refresh_ctbc_dialog()
 
     def open_depth_randomization_settings(self):
         env_id = self.env_id_cb.currentText()
@@ -3441,7 +4087,7 @@ class MainWindow(QMainWindow):
                     "min": min_value,
                     "max": max_value,
                 })
-            initial_positions = {
+            joint_offsets = {
                 "joints": {
                     joint_name: to_float(value, 0.0)
                     for joint_name, value in (self.initial_pose_settings.get("joints", {})).items()
@@ -3606,7 +4252,7 @@ class MainWindow(QMainWindow):
                 "action_clippings": action_clippings,
                 "actuator": actuator,
                 "hardware": hardware_numeric,
-                "initial_positions": initial_positions,
+                "joint_offsets": joint_offsets,
                 "monitoring": {
                     "selected_joints": list(self.monitor_settings.get("selected_joints", [])),
                     "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()) or inference_visualize,
@@ -3716,7 +4362,12 @@ class MainWindow(QMainWindow):
             self.moe_thread.wait(1000)
         if self.homing_dialog is not None and self.homing_dialog.isVisible():
             self.homing_dialog.close()
+        if self.ctbc_dialog is not None and self.ctbc_dialog.isVisible():
+            self.ctbc_dialog.close()
         if self.homing_thread is not None and self.homing_thread.isRunning():
             self.homing_thread.quit()
             self.homing_thread.wait(1000)
+        if self.ctbc_thread is not None and self.ctbc_thread.isRunning():
+            self.ctbc_thread.quit()
+            self.ctbc_thread.wait(1000)
         super().closeEvent(event)

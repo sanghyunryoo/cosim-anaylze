@@ -1,13 +1,14 @@
-# obs fields: ["dof_pos", "dof_vel", "ang_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "projected_gravity", "height_map", "last_action"]
+# obs fields: ["dof_pos", "dof_vel", "ang_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "projected_gravity", "height_map", "masked_height_map", "last_action"]
 
 "wheeldog_p_v2":
   "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
   "stack_size": 3
-  "non_stacked_obs_order": []
+  "non_stacked_obs_order": ["masked_height_map"]
   "obs_scales":
     "dof_pos": 1.0
     "dof_vel": 0.15
     "ang_vel": 0.25
+    "masked_height_map": 1.0
   "command":
     "command_dim": 3
     "command_3_initial": 0
@@ -185,7 +186,7 @@
 "flamingo_p_v3_1":
   "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
   "stack_size": 3
-  "non_stacked_obs_order": []
+  "non_stacked_obs_order": ["masked_height_map"]
   "obs_scales":
     "dof_pos": 1.0
     "dof_vel": 0.05
@@ -193,6 +194,7 @@
     "lin_vel_x": 2.0
     "lin_vel_y": 1.0
     "lin_vel_z": 0.25
+    "masked_height_map": 1.0
   "command":
     "command_dim": 4
     "command_3_initial": 0
@@ -204,8 +206,8 @@
     "4": 1.0
     "5": 1.0
   "height_map":
-    "size_x": 0.8
-    "size_y": 0.8
+    "size_x": 1.1
+    "size_y": 1.1
     "res_x": 12
     "res_y": 12
   "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
@@ -402,7 +404,7 @@
   "command_scales":
     "0": 2.0
     "1": 2.0
-    "2": 0.25
+    "2": 1.0
     "3": 1.0
     "4": 1.0
     "5": 1.0

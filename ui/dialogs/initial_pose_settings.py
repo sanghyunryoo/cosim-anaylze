@@ -10,13 +10,13 @@ class InitialPoseSettingsDialog(QDialog):
     def __init__(self, initial_pose_settings, parent):
         super().__init__(parent)
         self.initial_pose_settings = (initial_pose_settings or {}).copy()
-        self.setWindowTitle("Initial Pose Settings")
+        self.setWindowTitle("Joint Offset Settings")
         self._setup_ui()
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
 
-        description = QLabel("Set the initial joint positions applied before the test starts.")
+        description = QLabel("Set joint offsets. Zero means absolute joint values; non-zero values make joint state and action targets relative to the offset.")
         description.setWordWrap(True)
         main_layout.addWidget(description)
 

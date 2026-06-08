@@ -3,6 +3,7 @@ from core.tester import Tester
 from core.vision_heightmap_trainer import VisionHeightMapTrainer
 from core.moe_trainer import MoETrainer
 from core.homing_trainer import HomingTrainer
+from core.ctbc_trainer import CtbcTrainer
 
 
 class TesterWorker(QObject):
@@ -184,6 +185,63 @@ class HomingWorker(QObject):
                 summary = trainer.test_export_policy()
             else:
                 raise RuntimeError(f"Unknown Homing worker mode: {self.mode}")
+            self.finished.emit(summary)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class CtbcWorker(QObject):
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    log = pyqtSignal(str)
+
+    def __init__(self, repo_root: str, settings: dict, mode: str):
+        super().__init__()
+        self.repo_root = repo_root
+        self.settings = dict(settings or {})
+        self.mode = str(mode)
+        self._stop_requested = False
+        self._command_values = list(self.settings.get("command_values", []))
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def update_command_values(self, values):
+        self._command_values = list(values or [])
+
+    def command_values(self):
+        return list(self._command_values)
+
+    def stop_requested(self):
+        return bool(self._stop_requested)
+
+    def run(self):
+        try:
+            trainer = CtbcTrainer(
+                repo_root=self.repo_root,
+                settings=self.settings,
+                log_callback=self.log.emit,
+                stop_callback=self.stop_requested,
+                command_callback=self.command_values,
+            )
+            if self.mode == "rl_train":
+                summary = trainer.fine_tune()
+            elif self.mode == "tune_controller":
+                summary = trainer.tune_stair_controller()
+            elif self.mode == "export":
+                exported = trainer.export_onnx_from_checkpoint(
+                    self.settings.get("checkpoint_path", ""),
+                    self.settings.get("output_path", ""),
+                )
+                summary = {"env_id": self.settings.get("env_id", ""), "mode": "ctbc_export", "onnx_path": exported}
+            elif self.mode == "test_policy":
+                summary = trainer.test_export_policy()
+            elif self.mode == "test_controller":
+                summary = trainer.test_stair_controller()
+            elif self.mode == "test_primitive":
+                summary = trainer.test_primitive()
+            else:
+                raise RuntimeError(f"Unknown CTBC worker mode: {self.mode}")
             self.finished.emit(summary)
         except Exception as e:
             self.error.emit(str(e))

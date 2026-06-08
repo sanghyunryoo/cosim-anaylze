@@ -23,20 +23,8 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
       - elbow is 1DoF per arm: *_elbow_joint  (no elbow_pitch/yaw split)
       - wrist is 1DoF per arm: *_wrist_joint
       - head_joint included
-    Action / dof_pos / dof_vel order (26):
-      [0:1]   head
-      [1:3]   hip_pitch (L,R)
-      [3:5]   hip_roll (L,R)
-      [5:7]   hip_yaw (L,R)
-      [7:9]   knee (L,R)
-      [9:11]  ankle_pitch (L,R)
-      [11:13] ankle_roll (L,R)
-      [13:16] torso (yaw,roll,pitch)
-      [16:18] shoulder_pitch (L,R)
-      [18:20] shoulder_roll (L,R)
-      [20:22] shoulder_yaw (L,R)
-      [22:24] elbow (L,R)
-      [24:26] wrist (L,R)
+    Action / dof_pos / dof_vel order (26) follows IsaacLab asset/URDF joint order.
+    With joint_names=[".*"], IsaacLab resolves actions in the asset's joint list order.
     """
 
     metadata = {"render_modes": ["human", "rgb_array", "depth_array"]}
@@ -160,6 +148,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         self.filtered_action = np.zeros(self.action_dim, dtype=np.float64)
         self.prev_action = np.zeros(self.action_dim, dtype=np.float64)
         self.applied_torques = np.zeros(self.action_dim, dtype=np.float64)
+        self.ctrl_torques = np.zeros(self.action_dim, dtype=np.float64)
         self.viewer = None
         self.mode = None
 
@@ -180,20 +169,44 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             self.res_x = 0
             self.res_y = 0
 
-        # --- Controlled joint order (26) ---
+        # --- Controlled joint order (26), matching IsaacLab asset/URDF joint order ---
         self.joint_names_in_order = [
-            # head
+            "left_hip_pitch_joint",
+            "left_hip_roll_joint",
+            "left_hip_yaw_joint",
+            "left_knee_joint",
+            "left_ankle_pitch_joint",
+            "left_ankle_roll_joint",
+            "right_hip_pitch_joint",
+            "right_hip_roll_joint",
+            "right_hip_yaw_joint",
+            "right_knee_joint",
+            "right_ankle_pitch_joint",
+            "right_ankle_roll_joint",
+            "torso_yaw_joint",
+            "torso_pitch_joint",
+            "torso_roll_joint",
+            "left_shoulder_pitch_joint",
+            "left_shoulder_roll_joint",
+            "left_shoulder_yaw_joint",
+            "left_elbow_joint",
+            "left_wrist_joint",
+            "right_shoulder_pitch_joint",
+            "right_shoulder_roll_joint",
+            "right_shoulder_yaw_joint",
+            "right_elbow_joint",
+            "right_wrist_joint",
             "head_joint",
-            # legs
+        ]
+        self.actuator_joint_names_in_order = [
+            "head_joint",
             "left_hip_pitch_joint", "right_hip_pitch_joint",
             "left_hip_roll_joint", "right_hip_roll_joint",
             "left_hip_yaw_joint", "right_hip_yaw_joint",
             "left_knee_joint", "right_knee_joint",
             "left_ankle_pitch_joint", "right_ankle_pitch_joint",
             "left_ankle_roll_joint", "right_ankle_roll_joint",
-            # body
             "torso_yaw_joint", "torso_roll_joint", "torso_pitch_joint",
-            # arms
             "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
             "left_shoulder_roll_joint", "right_shoulder_roll_joint",
             "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",
@@ -209,6 +222,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             self.filtered_action = np.zeros(self.action_dim, dtype=np.float64)
             self.prev_action = np.zeros(self.action_dim, dtype=np.float64)
             self.applied_torques = np.zeros(self.action_dim, dtype=np.float64)
+            self.ctrl_torques = np.zeros(self.action_dim, dtype=np.float64)
             self.action_scaler = np.ones(self.action_dim, dtype=np.float64)
             self.action_clip_min, self.action_clip_max = normalize_action_clippings(config, self.action_dim)
 
@@ -249,7 +263,56 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         # --- Indices in qpos/qvel for controlled joints ---
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(self.joint_names_in_order)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(self.joint_names_in_order)
+        self.ctrl_from_policy_order = np.array(
+            [self.joint_names_in_order.index(name) for name in self.actuator_joint_names_in_order],
+            dtype=np.int64,
+        )
+        self.policy_from_ctrl_order = np.empty_like(self.ctrl_from_policy_order)
+        self.policy_from_ctrl_order[self.ctrl_from_policy_order] = np.arange(len(self.ctrl_from_policy_order))
+        self.uses_position_actuators = bool(np.any(self.model.actuator_biastype != 0))
         self.obs_joint_names_in_order = list(self.joint_names_in_order)
+        self.kp_by_joint, self.kd_by_joint, self.max_torque_by_joint = self._build_pd_vectors()
+
+    def _build_pd_vectors(self):
+        kp = np.zeros(self.action_dim, dtype=np.float64)
+        kd = np.zeros(self.action_dim, dtype=np.float64)
+        max_torque = np.zeros(self.action_dim, dtype=np.float64)
+
+        for i, joint_name in enumerate(self.joint_names_in_order):
+            if "hip_pitch" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_hip_pitch, self.kd_hip_pitch, self.max_hip_pitch
+            elif "hip_roll" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_hip_roll, self.kd_hip_roll, self.max_hip_roll
+            elif "hip_yaw" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_hip_yaw, self.kd_hip_yaw, self.max_hip_yaw
+            elif "knee" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_knee, self.kd_knee, self.max_knee
+            elif "ankle_pitch" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_ankle_pitch, self.kd_ankle_pitch, self.max_ankle_pitch
+            elif "ankle_roll" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_ankle_roll, self.kd_ankle_roll, self.max_ankle_roll
+            elif "torso_yaw" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_torso, self.kd_torso, self.max_torso_yaw
+            elif "torso_pitch" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_torso, self.kd_torso, self.max_torso_pitch
+            elif "torso_roll" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_torso, self.kd_torso, self.max_torso_roll
+            elif "shoulder_pitch" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_shoulder_pitch, self.kd_shoulder_pitch, self.max_shoulder_pitch
+            elif "shoulder_roll" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_shoulder_roll, self.kd_shoulder_roll, self.max_shoulder_roll
+            elif "shoulder_yaw" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_shoulder_yaw, self.kd_shoulder_yaw, self.max_shoulder_yaw
+            elif "elbow" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_elbow, self.kd_elbow, self.max_elbow
+            elif "wrist" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_wrist, self.kd_wrist, self.max_wrist
+            elif "head" in joint_name:
+                kp[i], kd[i], max_torque[i] = self.kp_head, self.kd_head, self.max_head
+            else:
+                raise ValueError(f"Unhandled humanoid_light joint: {joint_name}")
+
+        return kp, kd, max_torque
 
     # -----------------------
     # Observation
@@ -335,182 +398,32 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             "last_action": self.action.astype(np.float64),
         }
 
+    def _update_pd_torques(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices].astype(np.float64)
+        dof_vel = self.data.qvel[self.qd_indices].astype(np.float64)
+        torques = self.kp_by_joint * (action_scaled - dof_pos) - self.kd_by_joint * dof_vel
+        self.applied_torques = np.clip(
+            torques,
+            -self.max_torque_by_joint,
+            self.max_torque_by_joint,
+        ).astype(np.float64)
+        self.ctrl_torques = self.applied_torques[self.ctrl_from_policy_order]
+        return self.ctrl_torques
+
     # -----------------------
     # Step
     # -----------------------
     def step(self, action):
         self.action = np.asarray(action, dtype=np.float64)
         self.filtered_action = self.control_manager.delay_filter(self.action)
-
-        # Pull joint positions/velocities (controlled joints only, in our order)
-        dof_pos = self.data.qpos[self.q_indices].astype(np.float64)
-        dof_vel = self.data.qvel[self.qd_indices].astype(np.float64)
-
-        # --- Slice helper ---
-        def sl(a, b):
-            return slice(a, b)
-
-        s_head        = sl(0, 1)    # 1
-        s_hip_pitch   = sl(1, 3)    # L,R
-        s_hip_roll    = sl(3, 5)    # L,R
-        s_hip_yaw     = sl(5, 7)    # L,R
-        s_knee        = sl(7, 9)    # L,R
-        s_ank_pitch   = sl(9, 11)   # L,R
-        s_ank_roll    = sl(11, 13)  # L,R
-        s_torso_yaw   = sl(13, 14)  # 1
-        s_torso_roll  = sl(14, 15)  # 1
-        s_torso_pitch = sl(15, 16)  # 1
-        s_sh_pitch    = sl(16, 18)  # L,R
-        s_sh_roll     = sl(18, 20)  # L,R
-        s_sh_yaw      = sl(20, 22)  # L,R
-        s_elbow       = sl(22, 24)  # L,R
-        s_wrist       = sl(24, 26)  # L,R
-
-        # Targets (scaled actions)
         action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
-        tgt_head        = action_scaled[s_head]
-        tgt_hip_pitch   = action_scaled[s_hip_pitch]
-        tgt_hip_roll    = action_scaled[s_hip_roll]
-        tgt_hip_yaw     = action_scaled[s_hip_yaw]
-        tgt_knee        = action_scaled[s_knee]
-        tgt_ank_pitch   = action_scaled[s_ank_pitch]
-        tgt_ank_roll    = action_scaled[s_ank_roll]
-        tgt_torso_yaw   = action_scaled[s_torso_yaw]
-        tgt_torso_roll  = action_scaled[s_torso_roll]
-        tgt_torso_pitch = action_scaled[s_torso_pitch]
-        tgt_sh_pitch    = action_scaled[s_sh_pitch]
-        tgt_sh_roll     = action_scaled[s_sh_roll]
-        tgt_sh_yaw      = action_scaled[s_sh_yaw]
-        tgt_elbow       = action_scaled[s_elbow]
-        tgt_wrist       = action_scaled[s_wrist]
-
-        # Current states
-        pos_head,        vel_head        = dof_pos[s_head],        dof_vel[s_head]
-        pos_hip_pitch,   vel_hip_pitch   = dof_pos[s_hip_pitch],   dof_vel[s_hip_pitch]
-        pos_hip_roll,    vel_hip_roll    = dof_pos[s_hip_roll],    dof_vel[s_hip_roll]
-        pos_hip_yaw,     vel_hip_yaw     = dof_pos[s_hip_yaw],     dof_vel[s_hip_yaw]
-        pos_knee,        vel_knee        = dof_pos[s_knee],        dof_vel[s_knee]
-        pos_ank_pitch,   vel_ank_pitch   = dof_pos[s_ank_pitch],   dof_vel[s_ank_pitch]
-        pos_ank_roll,    vel_ank_roll    = dof_pos[s_ank_roll],    dof_vel[s_ank_roll]
-        pos_torso_yaw,   vel_torso_yaw   = dof_pos[s_torso_yaw],   dof_vel[s_torso_yaw]
-        pos_torso_roll,  vel_torso_roll  = dof_pos[s_torso_roll],  dof_vel[s_torso_roll]
-        pos_torso_pitch, vel_torso_pitch = dof_pos[s_torso_pitch], dof_vel[s_torso_pitch]
-        pos_sh_pitch,    vel_sh_pitch    = dof_pos[s_sh_pitch],    dof_vel[s_sh_pitch]
-        pos_sh_roll,     vel_sh_roll     = dof_pos[s_sh_roll],     dof_vel[s_sh_roll]
-        pos_sh_yaw,      vel_sh_yaw      = dof_pos[s_sh_yaw],      dof_vel[s_sh_yaw]
-        pos_elbow,       vel_elbow       = dof_pos[s_elbow],       dof_vel[s_elbow]
-        pos_wrist,       vel_wrist       = dof_pos[s_wrist],       dof_vel[s_wrist]
-
-        # PD torques
-        hip_pitch_t = self.control_manager.pd_controller(
-            self.kp_hip_pitch, tgt_hip_pitch, pos_hip_pitch,
-            self.kd_hip_pitch, 0.0, vel_hip_pitch
-        )
-
-        torso_yaw_t = self.control_manager.pd_controller(
-            self.kp_torso, tgt_torso_yaw, pos_torso_yaw,
-            self.kd_torso, 0.0, vel_torso_yaw
-        )
-        hip_roll_t = self.control_manager.pd_controller(
-            self.kp_hip_roll, tgt_hip_roll, pos_hip_roll,
-            self.kd_hip_roll, 0.0, vel_hip_roll
-        )
-        torso_pitch_t = self.control_manager.pd_controller(
-            self.kp_torso, tgt_torso_pitch, pos_torso_pitch,
-            self.kd_torso, 0.0, vel_torso_pitch
-        )
-        hip_yaw_t = self.control_manager.pd_controller(
-            self.kp_hip_yaw, tgt_hip_yaw, pos_hip_yaw,
-            self.kd_hip_yaw, 0.0, vel_hip_yaw
-        )
-        torso_roll_t = self.control_manager.pd_controller(
-            self.kp_torso, tgt_torso_roll, pos_torso_roll,
-            self.kd_torso, 0.0, vel_torso_roll
-        )
-
-        knee_t = self.control_manager.pd_controller(
-            self.kp_knee, tgt_knee, pos_knee,
-            self.kd_knee, 0.0, vel_knee
-        )
-        head_t = self.control_manager.pd_controller(
-            self.kp_head, tgt_head, pos_head,
-            self.kd_head, 0.0, vel_head
-        )
-
-        sh_pitch_t = self.control_manager.pd_controller(
-            self.kp_shoulder_pitch, tgt_sh_pitch, pos_sh_pitch,
-            self.kd_shoulder_pitch, 0.0, vel_sh_pitch
-        )
-        ank_pitch_t = self.control_manager.pd_controller(
-            self.kp_ankle_pitch, tgt_ank_pitch, pos_ank_pitch,
-            self.kd_ankle_pitch, 0.0, vel_ank_pitch
-        )
-        sh_roll_t = self.control_manager.pd_controller(
-            self.kp_shoulder_roll, tgt_sh_roll, pos_sh_roll,
-            self.kd_shoulder_roll, 0.0, vel_sh_roll
-        )
-        ank_roll_t = self.control_manager.pd_controller(
-            self.kp_ankle_roll, tgt_ank_roll, pos_ank_roll,
-            self.kd_ankle_roll, 0.0, vel_ank_roll
-        )
-        sh_yaw_t = self.control_manager.pd_controller(
-            self.kp_shoulder_yaw, tgt_sh_yaw, pos_sh_yaw,
-            self.kd_shoulder_yaw, 0.0, vel_sh_yaw
-        )
-        elbow_t = self.control_manager.pd_controller(
-            self.kp_elbow, tgt_elbow, pos_elbow,
-            self.kd_elbow, 0.0, vel_elbow
-        )
-        wrist_t = self.control_manager.pd_controller(
-            self.kp_wrist, tgt_wrist, pos_wrist,
-            self.kd_wrist, 0.0, vel_wrist
-        )
-
-        # Clip torques
-        hip_pitch_t = np.clip(hip_pitch_t, -self.max_hip_pitch, self.max_hip_pitch)
-        hip_roll_t  = np.clip(hip_roll_t,  -self.max_hip_roll,  self.max_hip_roll)
-        hip_yaw_t   = np.clip(hip_yaw_t,   -self.max_hip_yaw,   self.max_hip_yaw)
-        knee_t      = np.clip(knee_t,      -self.max_knee,      self.max_knee)
-
-        ank_pitch_t = np.clip(ank_pitch_t, -self.max_ankle_pitch, self.max_ankle_pitch)
-        ank_roll_t  = np.clip(ank_roll_t,  -self.max_ankle_roll,  self.max_ankle_roll)
-
-        sh_pitch_t  = np.clip(sh_pitch_t,  -self.max_shoulder_pitch, self.max_shoulder_pitch)
-        sh_roll_t   = np.clip(sh_roll_t,   -self.max_shoulder_roll,  self.max_shoulder_roll)
-        sh_yaw_t    = np.clip(sh_yaw_t,    -self.max_shoulder_yaw,   self.max_shoulder_yaw)
-
-        elbow_t = np.clip(elbow_t, -self.max_elbow, self.max_elbow)
-        wrist_t = np.clip(wrist_t, -self.max_wrist, self.max_wrist)
-        head_t  = np.clip(head_t,  -self.max_head,  self.max_head)
-
-        torso_yaw_t   = np.clip(torso_yaw_t,   -self.max_torso_yaw,   self.max_torso_yaw)
-        torso_pitch_t = np.clip(torso_pitch_t, -self.max_torso_pitch, self.max_torso_pitch)
-        torso_roll_t  = np.clip(torso_roll_t,  -self.max_torso_roll,  self.max_torso_roll)
-
-        # Concatenate EXACTLY in joint_names_in_order
-        self.applied_torques = np.concatenate(
-            [
-                head_t,          # 1
-                hip_pitch_t,     # 2
-                hip_roll_t,      # 2
-                hip_yaw_t,       # 2
-                knee_t,          # 2
-                ank_pitch_t,     # 2
-                ank_roll_t,      # 2
-                torso_yaw_t,     # 1
-                torso_roll_t,    # 1
-                torso_pitch_t,   # 1
-                sh_pitch_t,      # 2
-                sh_roll_t,       # 2
-                sh_yaw_t,        # 2
-                elbow_t,         # 2
-                wrist_t,         # 2
-            ],
-            axis=0,
-        ).astype(np.float64)
-
-        # Simulate
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        if self.uses_position_actuators:
+            self.do_simulation(action_scaled[self.ctrl_from_policy_order], self.frame_skip)
+            actuator_force = self.data.actuator_force.astype(np.float64)
+            self.ctrl_torques = actuator_force.copy()
+            self.applied_torques = actuator_force[self.policy_from_ctrl_order].copy()
+        else:
+            self.do_simulation(self._update_pd_torques(action_scaled), self.frame_skip)
 
         obs = self._get_obs()
         info = self._get_info()

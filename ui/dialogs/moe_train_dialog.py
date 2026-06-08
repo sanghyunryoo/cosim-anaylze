@@ -43,7 +43,7 @@ class MoETrainDialog(QDialog):
         layout.setSpacing(10)
 
         formula_label = QLabel(
-            "Formula: action = (1 - alpha) * Policy A(obs) + alpha * Policy B(obs)    |    alpha = Gate(obs)"
+            "Formula: physical = (1 - alpha) * Policy A(obs) * Scale A + alpha * Policy B(obs) * Scale B; action = physical / Output scale"
         )
         formula_label.setWordWrap(True)
         formula_label.setStyleSheet("font-weight: 600; color: #1f2937;")
@@ -64,8 +64,14 @@ class MoETrainDialog(QDialog):
 
         self.policy_a_le = QLineEdit()
         self.policy_b_le = QLineEdit()
+        self.policy_a_scales_le = QLineEdit()
+        self.policy_b_scales_le = QLineEdit()
+        self.output_scales_le = QLineEdit()
         setup_layout.addRow("Policy A:", self._file_row(self.policy_a_le))
         setup_layout.addRow("Policy B:", self._file_row(self.policy_b_le))
+        setup_layout.addRow("Scale A:", self.policy_a_scales_le)
+        setup_layout.addRow("Scale B:", self.policy_b_scales_le)
+        setup_layout.addRow("Output scale:", self.output_scales_le)
 
         self.samples_le = QLineEdit("200000")
         self.rollout_steps_le = QLineEdit("1000")
@@ -199,6 +205,9 @@ class MoETrainDialog(QDialog):
             "env_id": self.env_cb.currentText(),
             "policy_a_path": self.policy_a_le.text().strip(),
             "policy_b_path": self.policy_b_le.text().strip(),
+            "policy_a_action_scales": self.policy_a_scales_le.text().strip(),
+            "policy_b_action_scales": self.policy_b_scales_le.text().strip(),
+            "output_action_scales": self.output_scales_le.text().strip(),
             "terrains": self.get_selected_terrains(),
             "samples": self.samples_le.text().strip(),
             "rollout_steps": self.rollout_steps_le.text().strip(),
@@ -222,6 +231,9 @@ class MoETrainDialog(QDialog):
             self.env_cb.setCurrentText(str(settings.get("env_id")))
         self.policy_a_le.setText(str(settings.get("policy_a_path", "")))
         self.policy_b_le.setText(str(settings.get("policy_b_path", "")))
+        self.policy_a_scales_le.setText(str(settings.get("policy_a_action_scales", "")))
+        self.policy_b_scales_le.setText(str(settings.get("policy_b_action_scales", "")))
+        self.output_scales_le.setText(str(settings.get("output_action_scales", "")))
         self.samples_le.setText(str(settings.get("samples", "200000")))
         self.rollout_steps_le.setText(str(settings.get("rollout_steps", "1000")))
         self.boundary_le.setText(str(settings.get("boundary_m", "8.0")))
@@ -259,7 +271,9 @@ class MoETrainDialog(QDialog):
         self.stop_btn.setEnabled(self._running)
         for widget in (
             self.collect_btn, self.train_btn, self.export_btn, self.refresh_btn,
-            self.env_cb, self.policy_a_le, self.policy_b_le, self.terrain_list,
+            self.env_cb, self.policy_a_le, self.policy_b_le,
+            self.policy_a_scales_le, self.policy_b_scales_le, self.output_scales_le,
+            self.terrain_list,
             self.dataset_list, self.close_btns,
         ):
             widget.setEnabled(not self._running)

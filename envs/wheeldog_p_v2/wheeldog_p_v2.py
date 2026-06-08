@@ -14,6 +14,7 @@ from envs.wheeldog_p_v2.utils.noise_generator_utils import (
 )
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.masked_height_map import masked_height_map, parse_camera_fovs_from_xml
 
 
 class WheelDogPV2(MujocoEnv, utils.EzPickle):
@@ -72,6 +73,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         # Domain randomization / model path
         self.xml_manager = XMLManager(config)
         self.model_path = self.xml_manager.get_model_path()
+        self.height_map_cameras = parse_camera_fovs_from_xml(self.model_path)
 
         # Height map
         if self.config["observation"]["height_map"] is not None:
@@ -93,6 +95,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
             "projected_gravity": 3,
             "last_action": self.action_dim,
             "height_map": int(self.res_x * self.res_y),
+            "masked_height_map": int(self.res_x * self.res_y),
         }
 
         utils.EzPickle.__init__(self)
@@ -136,6 +139,18 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         self.initial_joint_names = list(qvel_joint_names)
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
+
+    def _debug_print_height_maps(self, height_map, masked_height_map):
+        interval = max(1, int(round(self.control_freq)))
+        if self.local_step % interval != 0:
+            return
+        raw = np.asarray(height_map, dtype=np.float64).reshape(self.res_y, self.res_x)
+        masked = np.asarray(masked_height_map, dtype=np.float64).reshape(self.res_y, self.res_x)
+        print(f"[{self.id}] height_map debug t={self.local_step / self.control_freq:.2f}s")
+        print("raw height_map:")
+        print(np.array2string(raw, precision=3, suppress_small=True))
+        print("masked_height_map:")
+        print(np.array2string(masked, precision=3, suppress_small=True))
 
     def _build_full_qpos_vector(self, dof_pos_12):
         """
@@ -235,11 +250,11 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
 
         if self.config["observation"]["height_map"] is not None:
             try:
-                height_map = self.mujoco_utils.get_height_map(
-                    self.data, self.size_x, self.size_y, self.res_x, self.res_y
+                height_map, height_points_w = self.mujoco_utils.get_height_map(
+                    self.data, self.size_x, self.size_y, self.res_x, self.res_y, return_points=True
                 )
             except TypeError:
-                height_map = self.mujoco_utils.get_height_map(
+                height_map, height_points_w = self.mujoco_utils.get_height_map(
                     self.data,
                     self.size_x / 2.0,
                     self.size_x / 2.0,
@@ -247,9 +262,23 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
                     self.size_y / 2.0,
                     self.res_x,
                     self.res_y,
+                    return_points=True,
                 )
+            masked_map, fov_valid_mask = masked_height_map(
+                self.model,
+                self.data,
+                height_map,
+                height_points_w,
+                self.height_map_cameras,
+                base_height=float(self.data.qpos[2]),
+                offset=0.5,
+                fill_value=0.5,
+                return_valid_mask=True,
+            )
+            self.mujoco_utils.color_heightmap_by_mask(fov_valid_mask, self.res_x, self.res_y)
         else:
             height_map = None
+            masked_map = None
 
         dof_pos_noisy = truncated_gaussian_noisy_data(
             dof_pos,
@@ -288,8 +317,19 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
                 lower=self.sensor_noise_map["height_map"]["lower"],
                 upper=self.sensor_noise_map["height_map"]["upper"],
             )
+            masked_height_map_noisy = truncated_gaussian_noisy_data(
+                masked_map,
+                mean=self.sensor_noise_map["height_map"]["mean"],
+                std=self.sensor_noise_map["height_map"]["std"],
+                lower=self.sensor_noise_map["height_map"]["lower"],
+                upper=self.sensor_noise_map["height_map"]["upper"],
+            )
         else:
             height_map_noisy = np.zeros((0,), dtype=np.float32)
+            masked_height_map_noisy = np.zeros((0,), dtype=np.float32)
+
+        if height_map is not None and masked_map is not None:
+            self._debug_print_height_maps(height_map, masked_map)
 
         return {
             "dof_pos": dof_pos_noisy,
@@ -297,6 +337,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
             "ang_vel": ang_vel_noisy,
             "projected_gravity": projected_gravity_noisy,
             "height_map": height_map_noisy,
+            "masked_height_map": masked_height_map_noisy,
             "last_action": self.action,
         }
 

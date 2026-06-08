@@ -367,16 +367,19 @@ class UnsupportedFineTunePolicy:
         raise RuntimeError("Merged ONNX export is not available for the current policy.")
 
 
-def build_policy(config, policy_path, encoder_path=None):
+def _build_raw_policy(config, policy_path, encoder_path=None):
     policy_type = config["policy"]["policy_type"]
     if policy_type == "MLP":
-        base_policy = MLPPolicy(policy_path)
+        return MLPPolicy(policy_path)
     elif policy_type == "LSTM":
-        base_policy = LSTMPolicy(config, policy_path)
+        return LSTMPolicy(config, policy_path)
     elif policy_type == "Encoder+MLP":
-        base_policy = EncoderPolicy(encoder_path=encoder_path, policy_path=policy_path)
-    else:
-        raise ValueError(f"Unsupported policy type: {policy_type}")
+        return EncoderPolicy(encoder_path=encoder_path, policy_path=policy_path)
+    raise ValueError(f"Unsupported policy type: {policy_type}")
+
+
+def build_policy(config, policy_path, encoder_path=None):
+    base_policy = _build_raw_policy(config, policy_path, encoder_path=encoder_path)
 
     try:
         return ResidualFineTunePolicy(

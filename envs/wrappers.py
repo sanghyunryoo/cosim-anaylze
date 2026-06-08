@@ -519,7 +519,7 @@ class CommandWrapper(BaseEnv):
     def reset(self):
         self.reset_flag = True
         init_state, info = self.env.reset()
-        init_state = np.concatenate((init_state, np.zeros(self.settings_cfg["command_dim"])))
+        init_state = np.concatenate((init_state, self.applied_command))
         return init_state, info
 
     def step(self, action: np.ndarray):

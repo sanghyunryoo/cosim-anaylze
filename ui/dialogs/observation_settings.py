@@ -72,7 +72,7 @@ class ObservationSettingsDialog(QDialog):
         self.obs_types = [
             "dof_pos", "dof_vel", "ang_vel",
             "lin_vel_x", "lin_vel_y", "lin_vel_z",
-            "projected_gravity", "height_map", "last_action"
+            "projected_gravity", "height_map", "masked_height_map", "last_action"
         ]
 
         # Saved settings (highest priority source)
@@ -436,7 +436,7 @@ class ObservationSettingsDialog(QDialog):
         """
         for rows in (self.stacked_rows, self.non_rows):
             for row in rows:
-                if row["combo"].currentText() == "height_map":
+                if row["combo"].currentText() in ("height_map", "masked_height_map"):
                     freq_val = to_int(row["freq"].currentText(), 50)
                     scale_val = to_float(row["scale"].currentText(), 1.0)
                     return True, freq_val, scale_val

@@ -8,13 +8,13 @@ class XMLManager:
     def __init__(self, config):
         self.config = config
         self.cur_dir = os.path.abspath(os.path.dirname(__file__))
-        self.body_components =["pelvis_link", "torso_roll_link", "torso_pitch_link", "torso_yaw_link"
+        self.body_components =["pelvis_link", "torso_roll_link", "torso_pitch_link", "torso_yaw_link",
                                
             "left_shoulder_pitch_link", "left_shoulder_roll_link", "left_shoulder_yaw_link", 
-            "left_elbow_link",
+            "left_elbow_link", "left_wrist_link",
 
             "right_shoulder_pitch_link", "right_shoulder_roll_link", "right_shoulder_yaw_link",
-            "right_elbow_link",
+            "right_elbow_link", "right_wrist_link",
 
             "left_hip_pitch_link", "left_hip_roll_link", "left_hip_yaw_link",
             "left_knee_link", "left_ankle_pitch_link", "left_ankle_roll_link",
@@ -26,10 +26,100 @@ class XMLManager:
 
         self.precision_attr_map = config["random_table"]["precision"]
 
+    def _pd_gains_for_joint(self, joint_name):
+        hw = self.config["hardware"]
+        if "hip_pitch" in joint_name:
+            return hw.get("Kp_hip_pitch", 150), hw.get("Kd_hip_pitch", 2)
+        if "hip_roll" in joint_name:
+            return hw.get("Kp_hip_roll", 150), hw.get("Kd_hip_roll", 2)
+        if "hip_yaw" in joint_name:
+            return hw.get("Kp_hip_yaw", 150), hw.get("Kd_hip_yaw", 2)
+        if "knee" in joint_name:
+            return hw.get("Kp_knee", 200), hw.get("Kd_knee", 4)
+        if "ankle_pitch" in joint_name:
+            return hw.get("Kp_ankle_pitch", 40), hw.get("Kd_ankle_pitch", 2)
+        if "ankle_roll" in joint_name:
+            return hw.get("Kp_ankle_roll", 40), hw.get("Kd_ankle_roll", 2)
+        if "torso" in joint_name:
+            return hw.get("Kp_torso", 300), hw.get("Kd_torso", 6)
+        if "shoulder_pitch" in joint_name:
+            return hw.get("Kp_shoulder_pitch", 100), hw.get("Kd_shoulder_pitch", 2)
+        if "shoulder_roll" in joint_name:
+            return hw.get("Kp_shoulder_roll", 100), hw.get("Kd_shoulder_roll", 2)
+        if "shoulder_yaw" in joint_name:
+            return hw.get("Kp_shoulder_yaw", 50), hw.get("Kd_shoulder_yaw", 2)
+        if "elbow" in joint_name:
+            return hw.get("Kp_elbow", 50), hw.get("Kd_elbow", 2)
+        if "wrist" in joint_name:
+            return hw.get("Kp_wrist", 50), hw.get("Kd_wrist", 2)
+        if "head" in joint_name:
+            return hw.get("Kp_head", 50), hw.get("Kd_head", 2)
+        return 100, 2
+
     def get_model_path(self):
-        original_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'humanoid_light_v1.xml')
+        # The current Isaac policy was trained from the URDF/USD model, not the
+        # older hand-edited mesh_v2 XML.  Use the URDF-converted MuJoCo model so
+        # principal-axis inertias, convex collision meshes, and fixed-joint
+        # merges match the training asset as closely as this sim-to-sim path can.
+        original_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'humanoid_light_v1_from_urdf.xml')
         tree = ET.parse(original_model_path)
         root = tree.getroot()
+
+        # Keep URDF-converted convex meshes for collision, but use the decimated
+        # mesh_v2 assets for visuals.  The mesh_v2 files are the MuJoCo-safe
+        # Blender-decimated versions of the original URDF visuals.
+        asset = root.find("asset")
+        visual_mesh_names = set()
+        if asset is not None:
+            for mesh in list(asset.findall("mesh")):
+                mesh_name = mesh.attrib.get("name")
+                mesh_file = mesh.attrib.get("file")
+                if not mesh_name or not mesh_file:
+                    continue
+                basename = os.path.basename(mesh_file)
+                stem, ext = os.path.splitext(basename)
+                modified = os.path.join(self.cur_dir, "..", "assets", "mesh_v2", f"{stem}_modified{ext}")
+                plain = os.path.join(self.cur_dir, "..", "assets", "mesh_v2", basename)
+                if os.path.isfile(modified):
+                    visual_file = f"../mesh_v2/{stem}_modified{ext}"
+                elif os.path.isfile(plain):
+                    visual_file = f"../mesh_v2/{basename}"
+                else:
+                    continue
+                visual_name = f"{mesh_name}_visual"
+                ET.SubElement(asset, "mesh", {"name": visual_name, "file": visual_file})
+                visual_mesh_names.add(mesh_name)
+
+        for body in root.findall(".//body"):
+            for geom in list(body.findall("geom")):
+                if geom.attrib.get("type") != "mesh":
+                    continue
+                mesh_name = geom.attrib.get("mesh")
+                geom_name = geom.attrib.get("name", "")
+                if mesh_name not in visual_mesh_names:
+                    continue
+                geom.attrib["group"] = "3"
+                geom.attrib["rgba"] = "1 1 1 0"
+
+                if any(
+                    existing.attrib.get("class") == "visual"
+                    and existing.attrib.get("mesh") == f"{mesh_name}_visual"
+                    for existing in body.findall("geom")
+                ):
+                    continue
+
+                visual_attrib = {
+                    "name": f"{geom_name}_mesh_v2_visual",
+                    "type": "mesh",
+                    "mesh": f"{mesh_name}_visual",
+                    "class": "visual",
+                }
+                for attr in ("pos", "quat"):
+                    if attr in geom.attrib:
+                        visual_attrib[attr] = geom.attrib[attr]
+                if "rgba" in geom.attrib and geom.attrib["rgba"] != "1 1 1 0":
+                    visual_attrib["rgba"] = geom.attrib["rgba"]
+                body.append(ET.Element("geom", visual_attrib))
 
         # 1. Set the terrain
         terrain = self.config["env"]["terrain"]
@@ -90,6 +180,11 @@ class XMLManager:
         # 6. Set the friction loss
         for default in root.findall(".//default"):
             default_class = default.attrib.get("class")
+            for joint in default.findall("joint"):
+                if "damping" in joint.attrib:
+                    joint.attrib["damping"] = "0.0"
+                if "frictionloss" in joint.attrib:
+                    joint.attrib["frictionloss"] = str(self.config["random"]["friction_loss"])
             if default_class == "joints":
                 for joint in default.findall("joint"):
                     if 'frictionloss' in joint.attrib:
@@ -98,6 +193,31 @@ class XMLManager:
                 for joint in default.findall("joint"):
                     if 'frictionloss' in joint.attrib:
                         joint.attrib['frictionloss'] = str(self.config["random"]["friction_loss"])
+
+        # Use MuJoCo position actuators for this policy.  The Isaac action is a
+        # joint-position target; this path matches the stable behavior of the
+        # trained policy better than re-integrating the PD torque explicitly.
+        joint_ranges = {}
+        for joint in root.findall(".//joint"):
+            joint_name = joint.attrib.get("name")
+            if not joint_name:
+                continue
+            _, kd = self._pd_gains_for_joint(joint_name)
+            joint.attrib["damping"] = str(kd)
+            joint_ranges[joint_name] = joint.attrib.get("range", "-3.14 3.14")
+
+        actuator = root.find("actuator")
+        if actuator is not None:
+            for actuator_elem in list(actuator):
+                joint_name = actuator_elem.attrib.get("joint")
+                if not joint_name:
+                    continue
+                kp, _ = self._pd_gains_for_joint(joint_name)
+                actuator_elem.tag = "position"
+                actuator_elem.attrib.pop("gear", None)
+                actuator_elem.attrib["kp"] = str(kp)
+                actuator_elem.attrib["ctrllimited"] = "true"
+                actuator_elem.attrib["ctrlrange"] = joint_ranges.get(joint_name, "-3.14 3.14")
 
         # 7. Initialize spheres for height map
         if self.config["observation"]["height_map"] is not None:
@@ -158,6 +278,23 @@ class XMLManager:
                         'group': '0',
                     })
                     target_body.append(site_element)
+
+        # Isaac training runs this robot with self-collisions disabled.
+        # Keep robot-ground contacts, but exclude every robot body-body pair.
+        contact = root.find("contact")
+        if contact is None:
+            contact = ET.SubElement(root, "contact")
+        for exclude in list(contact.findall("exclude")):
+            contact.remove(exclude)
+
+        body_names = [
+            body.attrib["name"]
+            for body in root.findall(".//body")
+            if body.attrib.get("name")
+        ]
+        for i, body1 in enumerate(body_names):
+            for body2 in body_names[i + 1:]:
+                ET.SubElement(contact, "exclude", {"body1": body1, "body2": body2})
 
         randomized_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'applied_humanoid_p_v0.xml')
         tree.write(randomized_model_path)

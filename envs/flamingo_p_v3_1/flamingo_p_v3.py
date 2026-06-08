@@ -11,6 +11,7 @@ from envs.flamingo_p_v3_1.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_p_v3_1.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.masked_height_map import masked_height_map, parse_camera_fovs_from_xml
 
 
 class FlamingoPV31(MujocoEnv, utils.EzPickle):
@@ -74,6 +75,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         # Domain Randomization
         self.xml_manager = XMLManager(config, has_wheels=self.has_wheels, use_gear=self.use_gear)
         self.model_path = self.xml_manager.get_model_path()
+        self.height_map_cameras = parse_camera_fovs_from_xml(self.model_path)
 
         # Height Map
         if self.config["observation"]["height_map"] is not None:
@@ -97,6 +99,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             "projected_gravity": 3,
             "last_action": self.action_dim,
             "height_map": int(self.res_x * self.res_y),
+            "masked_height_map": int(self.res_x * self.res_y),
         }
 
         # Set MuJoCo Wrapper
@@ -134,6 +137,18 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
 
+    def _debug_print_height_maps(self, height_map, masked_height_map):
+        interval = max(1, int(round(self.control_freq)))
+        if self.local_step % interval != 0:
+            return
+        raw = np.asarray(height_map, dtype=np.float64).reshape(self.res_y, self.res_x)
+        masked = np.asarray(masked_height_map, dtype=np.float64).reshape(self.res_y, self.res_x)
+        print(f"[{self.id}] height_map debug t={self.local_step / self.control_freq:.2f}s")
+        print("raw height_map:")
+        print(np.array2string(raw, precision=3, suppress_small=True))
+        print("masked_height_map:")
+        print(np.array2string(masked, precision=3, suppress_small=True))
+
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices].copy()
         dof_pos[4:6] = dof_pos[4:6] * self.gear_ratio if self.use_gear else dof_pos[4:6]  # Joint space -> Motor space
@@ -150,9 +165,11 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
 
         if self.config["observation"]["height_map"] is not None:
             try:
-                height_map = self.mujoco_utils.get_height_map(self.data, self.size_x, self.size_y, self.res_x, self.res_y)
+                height_map, height_points_w = self.mujoco_utils.get_height_map(
+                    self.data, self.size_x, self.size_y, self.res_x, self.res_y, return_points=True
+                )
             except TypeError:
-                height_map = self.mujoco_utils.get_height_map(
+                height_map, height_points_w = self.mujoco_utils.get_height_map(
                     self.data,
                     self.size_x / 2.0,
                     self.size_x / 2.0,
@@ -160,9 +177,23 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
                     self.size_y / 2.0,
                     self.res_x,
                     self.res_y,
+                    return_points=True,
                 )
+            masked_map, fov_valid_mask = masked_height_map(
+                self.model,
+                self.data,
+                height_map,
+                height_points_w,
+                self.height_map_cameras,
+                base_height=float(self.data.qpos[2]),
+                offset=0.5,
+                fill_value=0.5,
+                return_valid_mask=True,
+            )
+            self.mujoco_utils.color_heightmap_by_mask(fov_valid_mask, self.res_x, self.res_y)
         else:
             height_map = None
+            masked_map = None
 
         dof_pos_noisy = truncated_gaussian_noisy_data(dof_pos, **self.sensor_noise_map["dof_pos"])
         dof_vel_noisy = truncated_gaussian_noisy_data(dof_vel, **self.sensor_noise_map["dof_vel"])
@@ -170,6 +201,9 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         lin_vel_noisy = truncated_gaussian_noisy_data(lin_vel, **self.sensor_noise_map["lin_vel"])
         projected_gravity_noisy = truncated_gaussian_noisy_data(projected_gravity, **self.sensor_noise_map["projected_gravity"])
         height_map_noisy = truncated_gaussian_noisy_data(height_map, **self.sensor_noise_map["height_map"])
+        masked_height_map_noisy = truncated_gaussian_noisy_data(masked_map, **self.sensor_noise_map["height_map"])
+        if height_map is not None and masked_map is not None:
+            self._debug_print_height_maps(height_map, masked_map)
         return {
             "dof_pos": dof_pos_noisy,
             "dof_vel": dof_vel_noisy,
@@ -179,6 +213,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             "lin_vel_z": lin_vel_noisy[2],
             "projected_gravity": projected_gravity_noisy,
             "height_map": height_map_noisy,
+            "masked_height_map": masked_height_map_noisy,
             "last_action": self.action,
         }
 
