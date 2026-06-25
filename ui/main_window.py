@@ -30,7 +30,7 @@ from ui.dialogs.homing_train_dialog import HomingTrainDialog
 from ui.dialogs.ctbc_train_dialog import CtbcTrainDialog
 from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker, CtbcWorker
 from PyQt5.QtWidgets import QSizePolicy
-from envs.initial_pose import get_default_initial_joint_map, get_initial_pose_joint_names
+from envs.initial_pose import get_default_initial_pose, get_initial_pose_joint_names
 
 
 class _QtLogEmitter(QObject):
@@ -69,7 +69,17 @@ class MainWindow(QMainWindow):
         with open(config_path) as f:
             self.env_config = yaml.full_load(f)
 
-        self.obs_types = ["dof_pos", "dof_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "ang_vel", "projected_gravity", "height_map", "masked_height_map", "last_action"]
+        self.obs_types = [
+            "dof_pos", "dof_vel",
+            "lin_vel_x", "lin_vel_y", "lin_vel_z",
+            "ang_vel", "projected_gravity",
+            "lower_ang_vel", "upper_ang_vel",
+            "lower_projected_gravity", "upper_projected_gravity",
+            "lower_imu_ang_vel", "upper_imu_ang_vel",
+            "lower_imu_projected_gravity", "upper_imu_projected_gravity",
+            "height_map", "masked_height_map", "camera_height_map",
+            "last_action",
+        ]
 
         # Per-environment observation settings cache
         self.obs_settings_by_env = {}
@@ -201,7 +211,17 @@ class MainWindow(QMainWindow):
             "stack_size": 3,
             "command_dim": 6,
             "command_scales": {"0": 1.0, "1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0, "5": 1.0},
-            "height_map": {"size_x": 1.0, "size_y": 0.6, "res_x": 10, "res_y": 6, "freq": 50, "scale": 1.0},
+            "height_map": {
+                "size_x": 1.0,
+                "size_y": 0.6,
+                "res_x": 10,
+                "res_y": 6,
+                "freq": 50,
+                "scale": 1.0,
+                "target_height": 0.5,
+                "clipping_min": 0.0,
+                "clipping_max": 0.33,
+            },
             "dof_pos": None,
             "dof_vel": None,
             "lin_vel_x": None,
@@ -209,6 +229,10 @@ class MainWindow(QMainWindow):
             "lin_vel_z": None,
             "ang_vel": None,
             "projected_gravity": None,
+            "lower_imu_ang_vel": None,
+            "upper_imu_ang_vel": None,
+            "lower_imu_projected_gravity": None,
+            "upper_imu_projected_gravity": None,
             "last_action": None,
         }
 
@@ -259,7 +283,7 @@ class MainWindow(QMainWindow):
 
         height_in_order = any(
             name in stacked_list or name in non_stacked_list
-            for name in ("height_map", "masked_height_map")
+            for name in ("height_map", "masked_height_map", "camera_height_map")
         )
         if height_in_order:
             height_map_yaml = settings_cfg.get("height_map", {}) if isinstance(settings_cfg.get("height_map", {}), dict) else {}
@@ -270,6 +294,13 @@ class MainWindow(QMainWindow):
                 "res_y": to_int(height_map_yaml.get("res_y", 9)),
                 "freq": 50,
                 "scale": 1.0,
+                "target_height": to_float(height_map_yaml.get("target_height", 0.5), 0.5),
+                "clipping_min": to_float(height_map_yaml.get("clipping_min", 0.0), 0.0),
+                "clipping_max": to_float(height_map_yaml.get("clipping_max", 0.33), 0.33),
+                "point_stride": to_int(height_map_yaml.get("point_stride", 16), 16),
+                "max_range": to_float(height_map_yaml.get("max_range", 2.5), 2.5),
+                "camera_update_freq": to_float(height_map_yaml.get("camera_update_freq", 10.0), 10.0),
+                "debug_print": bool(height_map_yaml.get("debug_print", False)),
             }
         else:
             height_map_val = None
@@ -424,6 +455,25 @@ class MainWindow(QMainWindow):
         if env_id not in self.hardware_settings_by_env:
             self.hardware_settings_by_env[env_id] = self._make_hardware_defaults(env_id)
         self.hardware_settings = (self.hardware_settings_by_env[env_id]).copy()
+
+    @staticmethod
+    def _normalize_hardware_value(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if text == "":
+                return text
+            try:
+                number = float(text)
+            except ValueError:
+                return text
+            if number.is_integer() and not any(ch in text.lower() for ch in (".", "e")):
+                return int(number)
+            return number
+        return value
 
     def _get_current_action_dim(self, env_id=None):
         target_env_id = env_id or self.env_id_cb.currentText()
@@ -1217,9 +1267,13 @@ class MainWindow(QMainWindow):
 
     def _make_initial_pose_defaults(self, env_id: str):
         env_cfg = self.env_config.get(env_id, {}) or {}
-        raw = env_cfg.get("joint_offsets", {}) or {}
-        joint_defaults = get_default_initial_joint_map(env_id)
+        raw = env_cfg.get("initial_positions", env_cfg.get("initial_pose", env_cfg.get("joint_offsets", {}))) or {}
+        pose_defaults = get_default_initial_pose(env_id)
+        joint_defaults = pose_defaults["joints"]
+        base_z = pose_defaults["base_z"]
         joints_raw = raw.get("joints", raw) if isinstance(raw, dict) else {}
+        if isinstance(raw, dict):
+            base_z = raw.get("base_z", raw.get("z", base_z))
         if isinstance(joints_raw, dict):
             for joint_name in joint_defaults:
                 if joint_name in joints_raw:
@@ -1229,13 +1283,14 @@ class MainWindow(QMainWindow):
         else:
             for joint_name in joint_defaults:
                 joint_defaults[joint_name] = str(joint_defaults[joint_name])
-        return {"joints": joint_defaults}
+        return {"base_z": str(base_z), "joints": joint_defaults}
 
     def _ensure_initial_pose_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.initial_pose_settings_by_env:
             self.initial_pose_settings_by_env[env_id] = self._make_initial_pose_defaults(env_id)
         self.initial_pose_settings = {
+            "base_z": str((self.initial_pose_settings_by_env[env_id]).get("base_z", self._make_initial_pose_defaults(env_id).get("base_z", "0.3"))),
             "joints": dict((self.initial_pose_settings_by_env[env_id]).get("joints", {}))
         }
 
@@ -1752,11 +1807,13 @@ class MainWindow(QMainWindow):
 
         if new_env_id in self.initial_pose_settings_by_env:
             self.initial_pose_settings = {
+                "base_z": str((self.initial_pose_settings_by_env[new_env_id]).get("base_z", self._make_initial_pose_defaults(new_env_id).get("base_z", "0.3"))),
                 "joints": dict((self.initial_pose_settings_by_env[new_env_id]).get("joints", {}))
             }
         else:
             self.initial_pose_settings = self._make_initial_pose_defaults(new_env_id)
             self.initial_pose_settings_by_env[new_env_id] = {
+                "base_z": str((self.initial_pose_settings).get("base_z", "0.3")),
                 "joints": dict((self.initial_pose_settings).get("joints", {}))
             }
         self._ensure_final_pose_defaults_for_env(new_env_id)
@@ -2185,9 +2242,9 @@ class MainWindow(QMainWindow):
         settings_btn.clicked.connect(self.open_hardware_settings)
         env_layout.addRow("Hardware:", settings_btn)
 
-        initial_pose_btn = QPushButton("Joint Offset Settings")
+        initial_pose_btn = QPushButton("Initial Pose Settings")
         initial_pose_btn.clicked.connect(self.open_initial_pose_settings)
-        env_layout.addRow("Joint Offset:", initial_pose_btn)
+        env_layout.addRow("Initial Pose:", initial_pose_btn)
 
         obs_settings_btn = QPushButton("Observation Settings")
         obs_settings_btn.clicked.connect(self.open_observation_settings)
@@ -2417,7 +2474,7 @@ class MainWindow(QMainWindow):
 
         self.sensor_noise_cb = NoWheelComboBox()
         self.sensor_noise_cb.addItems(["none", "low", "medium", "high", "ultra", "extreme"])
-        self.sensor_noise_cb.setCurrentText("low")
+        self.sensor_noise_cb.setCurrentText("none")
         form_layout.addRow("Sensor Noise:", self.sensor_noise_cb)
 
         def create_slider_row(slider, min_val, max_val, init_val, scale, decimals):
@@ -2434,13 +2491,13 @@ class MainWindow(QMainWindow):
         self.init_noise_slider = NoWheelSlider(Qt.Horizontal)
         form_layout.addRow("Init Noise:", create_slider_row(self.init_noise_slider, 0, 100, 5, 100, 2))
         self.sliding_friction_slider = NoWheelSlider(Qt.Horizontal)
-        form_layout.addRow("Sliding Friction:", create_slider_row(self.sliding_friction_slider, 0, 100, 80, 100, 2))
+        form_layout.addRow("Sliding Friction:", create_slider_row(self.sliding_friction_slider, 0, 100, 100, 100, 2))
         self.torsional_friction_slider = NoWheelSlider(Qt.Horizontal)
-        form_layout.addRow("Torsional Friction:", create_slider_row(self.torsional_friction_slider, 0, 10, 2, 100, 2))
+        form_layout.addRow("Torsional Friction:", create_slider_row(self.torsional_friction_slider, 0, 100, 50, 10000, 4))
         self.rolling_friction_slider = NoWheelSlider(Qt.Horizontal)
-        form_layout.addRow("Rolling Friction:", create_slider_row(self.rolling_friction_slider, 0, 10, 1, 100, 2))
+        form_layout.addRow("Rolling Friction:", create_slider_row(self.rolling_friction_slider, 0, 100, 1, 10000, 4))
         self.friction_loss_slider = NoWheelSlider(Qt.Horizontal)
-        form_layout.addRow("Friction Loss:", create_slider_row(self.friction_loss_slider, 0, 100, 10, 100, 2))
+        form_layout.addRow("Friction Loss:", create_slider_row(self.friction_loss_slider, 0, 100, 0, 100, 2))
         self.action_delay_prob_slider = NoWheelSlider(Qt.Horizontal)
         form_layout.addRow("Action Delay Prob.:", create_slider_row(self.action_delay_prob_slider, 0, 100, 5, 100, 2))
         self.mass_noise_slider = NoWheelSlider(Qt.Horizontal)
@@ -3372,7 +3429,10 @@ class MainWindow(QMainWindow):
         hardware = self.hardware_settings_by_env.get(env_id)
         if hardware is None:
             hardware = self._make_hardware_defaults(env_id)
-        hardware_numeric = {k: to_float(v, v) for k, v in dict(hardware).items()}
+        hardware_numeric = {
+            k: (v if isinstance(v, bool) else to_float(v, v))
+            for k, v in dict(hardware).items()
+        }
 
         action_scales = self.action_scales_by_env.get(env_id)
         if action_scales is None:
@@ -3389,7 +3449,8 @@ class MainWindow(QMainWindow):
         initial_pose = self.initial_pose_settings_by_env.get(env_id)
         if initial_pose is None:
             initial_pose = self._make_initial_pose_defaults(env_id)
-        joint_offsets = {
+        initial_positions = {
+            "base_z": to_float(initial_pose.get("base_z", self._make_initial_pose_defaults(env_id).get("base_z", 0.3)), 0.3),
             "joints": {
                 joint_name: to_float(value, 0.0)
                 for joint_name, value in dict(initial_pose.get("joints", {})).items()
@@ -3401,7 +3462,8 @@ class MainWindow(QMainWindow):
             "action_scales": [to_float(value, 1.0) for value in list(action_scales or [])],
             "action_clippings": [dict(item) for item in list(action_clippings or [])],
             "actuator": dict(actuator or {}),
-            "joint_offsets": joint_offsets,
+            "initial_positions": initial_positions,
+            "joint_offsets": initial_positions,
             "random": {
                 "precision": self.precision_cb.currentText(),
                 "sensor_noise": self.sensor_noise_cb.currentText(),
@@ -3918,6 +3980,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_() == QDialog.Accepted:
             self.initial_pose_settings = dialog.get_settings()
             self.initial_pose_settings_by_env[env_id] = {
+                "base_z": str((self.initial_pose_settings).get("base_z", "0.3")),
                 "joints": dict((self.initial_pose_settings).get("joints", {}))
             }
 
@@ -4072,7 +4135,10 @@ class MainWindow(QMainWindow):
             self._ensure_fine_tune_defaults()
             self._ensure_depth_randomization_defaults()
             # hardware: convert numeric strings to float where applicable
-            hardware_numeric = {k: to_float(v, v) for k, v in self.hardware_settings.items()}
+            hardware_numeric = {
+                k: self._normalize_hardware_value(v)
+                for k, v in self.hardware_settings.items()
+            }
             actuator = (self.actuator_settings).copy()
             action_scales = [to_float(v, 1.0) for v in self.action_scales]
             action_clippings = []
@@ -4087,7 +4153,8 @@ class MainWindow(QMainWindow):
                     "min": min_value,
                     "max": max_value,
                 })
-            joint_offsets = {
+            initial_positions = {
+                "base_z": to_float(self.initial_pose_settings.get("base_z", self._make_initial_pose_defaults(self.env_id_cb.currentText()).get("base_z", 0.3)), 0.3),
                 "joints": {
                     joint_name: to_float(value, 0.0)
                     for joint_name, value in (self.initial_pose_settings.get("joints", {})).items()
@@ -4198,6 +4265,13 @@ class MainWindow(QMainWindow):
                 "res_x": to_int(yaml_hm.get("res_x", 15)),
                 "res_y": to_int(yaml_hm.get("res_y", 9)),
                 "resolution": to_float(yaml_hm.get("resolution", 0.1), 0.1),
+                "target_height": to_float(yaml_hm.get("target_height", 0.5), 0.5),
+                "clipping_min": to_float(yaml_hm.get("clipping_min", 0.0), 0.0),
+                "clipping_max": to_float(yaml_hm.get("clipping_max", 0.33), 0.33),
+                "point_stride": to_int(yaml_hm.get("point_stride", 16), 16),
+                "max_range": to_float(yaml_hm.get("max_range", 2.5), 2.5),
+                "camera_update_freq": to_float(yaml_hm.get("camera_update_freq", 10.0), 10.0),
+                "debug_print": bool(yaml_hm.get("debug_print", False)),
             }
 
             hm_val = settings_cfg.get("height_map", None)
@@ -4213,6 +4287,13 @@ class MainWindow(QMainWindow):
                 hm_val.setdefault("resolution", yaml_hm_defaults["resolution"])
                 hm_val.setdefault("freq", 50)
                 hm_val.setdefault("scale", 1.0)
+                hm_val.setdefault("target_height", yaml_hm_defaults["target_height"])
+                hm_val.setdefault("clipping_min", yaml_hm_defaults["clipping_min"])
+                hm_val.setdefault("clipping_max", yaml_hm_defaults["clipping_max"])
+                hm_val.setdefault("point_stride", yaml_hm_defaults["point_stride"])
+                hm_val.setdefault("max_range", yaml_hm_defaults["max_range"])
+                hm_val.setdefault("camera_update_freq", yaml_hm_defaults["camera_update_freq"])
+                hm_val.setdefault("debug_print", yaml_hm_defaults["debug_print"])
                 settings_cfg["height_map"] = hm_val
             elif hm_val is None:
                 settings_cfg["height_map"] = None
@@ -4252,7 +4333,8 @@ class MainWindow(QMainWindow):
                 "action_clippings": action_clippings,
                 "actuator": actuator,
                 "hardware": hardware_numeric,
-                "joint_offsets": joint_offsets,
+                "initial_positions": initial_positions,
+                "joint_offsets": initial_positions,
                 "monitoring": {
                     "selected_joints": list(self.monitor_settings.get("selected_joints", [])),
                     "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()) or inference_visualize,

@@ -41,9 +41,9 @@
 
     <body name="base_link" pos="0.00000000 0.00000000 0.113" quat="1 0 0 0">
       <inertial
-        mass="2.78446"
-        pos="-0.0195048 -0.00114127 -0.0369376"
-        fullinertia="0.00568153 0.0101431 0.0118545 2.08273e-05 -0.000167191 -9.10064e-07"/>
+        mass="2.78445897269887"
+        pos="-0.0195047972877255 -0.00114127400058525 -0.0369375923521345"
+        fullinertia="0.00568152962783648 0.0101430658802046 0.0118545244442325 2.08273037995849e-05 -0.00016719134627533 -9.10064267154278e-07"/>
 
       <joint name="base_free_joint" type="free" damping="0.0" />
       <site name="imu" size="0.01" pos="0. 0. 0."/>
@@ -53,32 +53,32 @@
 
       <body name="left_shoulder_link" pos="-0.0435 0.102 -0.037821"
             quat="0 0 0.7071068 0.7071068">
-        <joint name="left_shoulder_joint" type="hinge" class="joints" range="-0.75 0" axis="0 0 1" />
+        <joint name="left_shoulder_joint" type="hinge" class="joints" range="-0.7610 0" axis="0 0 1" />
         <site name="left_shoulder_joint_site" pos="0 0 0" quat="1 0 0 0" />
         <inertial
             pos="0.0597356 -0.000169757 0.00751119"
-            mass="0.120772"
-            fullinertia="1.92659e-05 0.000373973 0.000390796 1.02981e-06 -3.98847e-06 1.13117e-08" />
+            mass="0.120771696789504"
+            fullinertia="1.92659317592962e-05 0.000373972678532597 0.000390796235917043 1.02981305680237e-06 -3.98847080348154e-06 1.13117420615334e-08" />
 
         <geom name="left_shoulder_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_shoulder_link.STL" class="collision" />
         <geom name="left_shoulder_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="left_shoulder_link.STL" class="visual" />
 
         <body name="left_leg_link" pos="0.16 -0.00046086 0.00795" quat="1 0 0 0">
-          <joint name="left_leg_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 1" />
+          <joint name="left_leg_joint" type="hinge" class="joints" range="-3.14 3.14" axis="0 0 1" />
           <site name="left_leg_joint_site" pos="0 0 0" quat="1 0 0 0" />
           <inertial
-            pos="-0.0693084 -0.0176428 0.0090402"
-            mass="0.267462"
-            fullinertia="0.000149992 0.0010247 0.00114791 -9.45258e-05 5.89796e-05 4.39968e-06" />
+            pos="-0.0693084137305347 -0.017642784546594 0.00904020062331872"
+            mass="0.267461827781674"
+            fullinertia="0.000149991864042205 0.00102470243009107 0.0011479057686297 -9.45257657469054e-05 5.89796301695987e-05 4.39967814374385e-06" />
           <geom name="left_leg_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_leg_link.STL" class="collision" />
           <geom name="left_leg_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="left_leg_link.STL" class="visual" />
 
           <body name="left_wheel_link" pos="-0.15892 -0.018539 0.052025" quat="1 0 0 0">
             <joint name="left_wheel_joint" type="hinge" class="wheels" limited="false" axis="0 0 1" />
             <inertial
-                pos="0 0 0.00851566"
-                mass="0.600141"
-                fullinertia="0.00111494 0.00111494 0.00206012 2.11893e-20 1.03238e-18 -4.48313e-19" />
+                pos="8.91431026217582e-16 6.59194920871187e-17 0.00851566442519004"
+                mass="0.600140982541541"
+                fullinertia="0.0011149354481547 0.0011149354481547 0.00206011518509781 2.11892766754215e-20 1.03237588329996e-18 -4.48313359746433e-19" />
             <geom name="left_wheel_collision" type="cylinder" size="0.076 0.023" friction="0.8 0.02 0.01" class="collision" />
             <geom name="left_wheel_visual"    type="cylinder" size="0.076 0.023" class="visual" />
           </body>
@@ -86,22 +86,22 @@
       </body>
 
       <body name="right_shoulder_link" pos="-0.0435 -0.102 -0.037821" quat="0.7071068 0.7071068 0 0">
-        <joint name="right_shoulder_joint" type="hinge" class="joints" range="-0.75 0" axis="0 0 -1" />
+        <joint name="right_shoulder_joint" type="hinge" class="joints" range="-0.7610 0" axis="0 0 -1" />
         <site name="right_shoulder_joint_site" pos="0 0 0" quat="1 0 0 0" />
         <inertial
-            pos="-0.0597356 -0.000174367 0.00751362"
-            mass="0.120772"
-            fullinertia="1.92658e-05 0.000373973 0.000390796 -1.01359e-06 3.98847e-06 1.16649e-08" />
+            pos="-0.0597356283497604 -0.00017436675863099 0.00751362431455366"
+            mass="0.120771696789505"
+            fullinertia="1.92658393877806e-05 0.000373972770904114 0.000390796235917044 -1.01358906305115e-06 3.98846978618152e-06 1.16649239484655e-08" />
         <geom name="right_shoulder_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_shoulder_link.STL" class="collision" />
         <geom name="right_shoulder_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="right_shoulder_link.STL" class="visual" />
 
         <body name="right_leg_link" pos="-0.16 -0.00046086 0.00805" quat="1 0 0 0">
-          <joint name="right_leg_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 -1" />
+          <joint name="right_leg_joint" type="hinge" class="joints" range="-3.14 3.14" axis="0 0 -1" />
           <site name="right_leg_joint_site" pos="0 0 0" quat="1 0 0 0" />
           <inertial
-            pos="0.06936 -0.0175109 0.0089902"
-            mass="0.267462"
-            fullinertia="0.000149956 0.00102474 0.00114791 9.44862e-05 -5.89854e-05 4.38473e-06" />
+            pos="0.0693599817171648 -0.0175108766213583 0.0089901997101457"
+            mass="0.267461792062622"
+            fullinertia="0.000149955618261177 0.00102473823544115 0.00114790531824343 9.44862369660646e-05 -5.89853813838262e-05 4.38472541132712e-06" />
           <geom name="right_leg_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_leg_link.STL" class="collision" />
           <geom name="right_leg_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="right_leg_link.STL" class="visual" />
 
@@ -109,9 +109,9 @@
             <joint name="right_wheel_joint" type="hinge" class="wheels" limited="false" axis="0 0 -1" />
             <site name="right_wheel_joint_site" pos="0 0 0" quat="1 0 0 0" />
             <inertial
-                pos="0 0 0.00851566"
-                mass="0.600141"
-                fullinertia="0.00111494 0.00111494 0.00206012 4.08485e-19 -1.47387e-20 -7.39986e-20" />
+                pos="-1.97953632652403e-15 -3.33066907387547e-15 0.00851566442519008"
+                mass="0.600140982541541"
+                fullinertia="0.0011149354481547 0.0011149354481547 0.00206011518509781 4.08485462369603e-19 -1.47387066706439e-20 -7.39986267535864e-20" />
             <geom name="right_wheel_collision" type="cylinder" size="0.076 0.023" friction="0.8 0.02 0.01" class="collision" />
             <geom name="right_wheel_visual"    type="cylinder" size="0.076 0.023" class="visual" />
           </body>
@@ -120,23 +120,23 @@
 
       <body name="left_upper_link" pos="-0.060601 0.1099 0.0091638"
             quat="0 0 0.7071068 0.7071068">
-        <joint name="left_upper_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 1" />
+        <joint name="left_upper_joint" type="hinge" class="joints" range="-3.14 3.14" axis="0 0 1" />
         <site name="left_upper_joint_site" pos="0 0 0" quat="1 0 0 0" />
         <inertial
-            pos="0.087469 -0.0104411 0.00142719"
-            mass="0.0577772"
-            fullinertia="3.64521e-06 0.0001087 0.000110842 1.47444e-05 -2.19916e-07 1.60571e-07" />
+            pos="0.0874690292875401 -0.0104411245932605 0.00142719424785788"
+            mass="0.0577772091639369"
+            fullinertia="3.64521244339026e-06 0.00010869984328475 0.000110842213116557 1.47443769607531e-05 -2.19916289236511e-07 1.60570779108621e-07" />
         <geom name="left_upper_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="left_upper_link.STL" class="collision" />
         <geom name="left_upper_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="left_upper_link.STL" class="visual" />
       </body>
 
       <body name="right_upper_link" pos="-0.060601 -0.1099 0.0091638" quat="0.7071068 0.7071068 0 0">
-        <joint name="right_upper_joint" type="hinge" class="joints" range="-3.14159 3.14159" axis="0 0 -1" />
+        <joint name="right_upper_joint" type="hinge" class="joints" range="-3.14 3.14" axis="0 0 -1" />
         <site name="right_upper_joint_site" pos="0 0 0" quat="1 0 0 0" />
         <inertial
-            pos="-0.087469 -0.0104411 0.00143227"
-            mass="0.0577772"
-            fullinertia="3.64521e-06 0.0001087 0.000110842 -1.47444e-05 2.19917e-07 1.60571e-07" />
+            pos="-0.0874690152895084 -0.0104411213597965 0.00143227230938398"
+            mass="0.057777209201571"
+            fullinertia="3.64521196878487e-06 0.000108699843782186 0.000110842213138297 -1.47443719199555e-05 2.19916693382766e-07 1.60570795115929e-07" />
         <geom name="right_upper_link_collision" pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="right_upper_link.STL" class="collision" />
         <geom name="right_upper_link_visual"    pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="right_upper_link.STL" class="visual" />
       </body>
@@ -220,6 +220,54 @@
         <geom name="RR_caster_link_visual" pos="0 0 0" quat="1 0 0 0" material="" type="mesh" mesh="RR_caster_link.STL" class="visual" />
       </body>
 
+      <body name="sensor_mount_link" pos="0.021839 0.00099604 0.093686" quat="1 0 0 0">
+        <inertial
+            pos="-0.00808111425753408 0.0032755352978255 -0.0181941952126975"
+            mass="0.611294472871864"
+            fullinertia="0.00190990567252455 0.00139983892501809 0.00241481264668523 -1.62469232000704e-05 -0.000171504786976252 -2.41094372686426e-05" />
+        <geom name="sensor_mount_link_collision" pos="0 0 0" quat="1 0 0 0"
+              type="mesh" mesh="sensor_mount_link.STL" class="collision" />
+        <geom name="sensor_mount_link_visual" pos="0 0 0" quat="1 0 0 0" material=""
+              type="mesh" mesh="sensor_mount_link.STL" class="visual" />
+
+        <body name="F_camera_link" pos="0.053264 0.0012578 -0.057725" quat="0.27059575 -0.65328103 0.65328343 -0.27059675">
+          <inertial
+              pos="-0.000479238809843033 2.78150064902671e-05 -0.0125654095950649"
+              mass="0.0457682375319545"
+              fullinertia="4.13726235739118e-06 2.7875502481937e-05 2.75911608124787e-05 -1.45862301266028e-09 -4.09602551553101e-07 -7.45139426440473e-09" />
+          <geom name="F_camera_link_collision" pos="0 0 0" quat="1 0 0 0"
+                type="mesh" mesh="F_camera_link.STL" class="collision"
+                contype="0" conaffinity="0" />
+          <geom name="F_camera_link_visual" pos="0 0 0" quat="1 0 0 0" material=""
+                type="mesh" mesh="F_camera_link.STL" class="visual" />
+          <camera name="depth_camera" pos="0 0 0" quat="0 1 0 0" fovy="58" />
+        </body>
+
+        <body name="A_camera_link" pos="0.062914 0.0012578 -0.0175" quat="0.49999816 -0.5 0.50000184 -0.5">
+          <inertial
+              pos="-0.000479240241576417 2.78199923506722e-05 -0.0125653980757386"
+              mass="0.0457681807749963"
+              fullinertia="4.13724811676117e-06 2.78754963673029e-05 2.75911514849689e-05 -1.459572069017e-09 -4.09602249856452e-07 -7.44880970295598e-09" />
+          <geom name="A_camera_link_collision" pos="0 0 0" quat="1 0 0 0"
+                type="mesh" mesh="A_camera_link.STL" class="collision"
+                contype="0" conaffinity="0" />
+          <geom name="A_camera_link_visual" pos="0 0 0" quat="1 0 0 0" material=""
+                type="mesh" mesh="A_camera_link.STL" class="visual" />
+        </body>
+
+        <body name="lidar_link" pos="0.016496 0.00062477 0.0453" quat="0 1 0 0">
+          <inertial
+              pos="-0.00110491573238405 -1.70565712178383e-05 -0.0195148951869959"
+              mass="0.0523970418812064"
+              fullinertia="1.13651221649026e-05 1.13943143931702e-05 1.91779681220885e-05 -5.78781650611013e-09 4.19727663352895e-10 -5.60309057878293e-10" />
+          <geom name="lidar_link_collision" pos="0 0 0" quat="1 0 0 0"
+                type="mesh" mesh="lidar_link.STL" class="collision"
+                contype="0" conaffinity="0" />
+          <geom name="lidar_link_visual" pos="0 0 0" quat="1 0 0 0" material=""
+                type="mesh" mesh="lidar_link.STL" class="visual" />
+        </body>
+      </body>
+
     </body>
   </worldbody>
 
@@ -249,11 +297,16 @@
     <mesh name="FR_caster_link.STL" file="../mesh/FR_caster_link.STL" />
     <mesh name="RL_caster_link.STL" file="../mesh/RL_caster_link.STL" />
     <mesh name="RR_caster_link.STL" file="../mesh/RR_caster_link.STL" />
+    <mesh name="sensor_mount_link.STL" file="../mesh/sensor_mount_link.STL" />
+    <mesh name="F_camera_link.STL" file="../mesh/F_camera_link.STL" />
+    <mesh name="A_camera_link.STL" file="../mesh/A_camera_link.STL" />
+    <mesh name="lidar_link.STL" file="../mesh/lidar_link.STL" />
 
     <hfield name="rocky_easy" file="../terrain/rocky_easy.png" nrow="512" ncol="512" size="140 140 0.1 0.1" />
     <hfield name="rocky_hard" file="../terrain/rocky_hard.png" nrow="512" ncol="512" size="140 140 0.25 0.1" />
     <hfield name="slope_easy" file="../terrain/slope_easy.png" nrow="512" ncol="512" size="140 140 0.5 0.1" />
     <hfield name="slope_hard" file="../terrain/slope_hard.png" nrow="512" ncol="512" size="140 140 1 0.1" />
+    <hfield name="stairs_up_light" file="../terrain/stairs_up_light.png" nrow="1024" ncol="1024" size="5 5 0.55 0.5" />
     <hfield name="stairs_up_easy" file="../terrain/stairs_up_easy.png" nrow="512" ncol="512" size="5 5 0.60 0.5" />
     <hfield name="stairs_up_normal" file="../terrain/stairs_up_normal.png" nrow="512" ncol="512" size="5 5 0.7 0.5" />
     <hfield name="stairs_up_hard" file="../terrain/stairs_up_hard.png" nrow="512" ncol="512" size="5 5 0.825 0.5" />

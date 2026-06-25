@@ -9,6 +9,9 @@ class MuJoCoUtils:
     def __init__(self, model):
         self.model = model
         self.hf_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+        self.ground_geom_type = (
+            int(self.model.geom_type[self.hf_geom_id]) if self.hf_geom_id != -1 else -1
+        )
         self.site_ids = None
 
     def get_body_indices_by_name(self, body_names):
@@ -95,7 +98,23 @@ class MuJoCoUtils:
                     raise ValueError(f"Site '{name}' not found in model. Check that the XML defines this site.")
                 self.site_ids[i][j] = sid
 
-    def get_height_map(self, data, size_x, size_y, res_x, res_y):
+    def color_heightmap_by_mask(
+        self,
+        valid_mask,
+        res_x,
+        res_y,
+        valid_rgba=(0.0, 1.0, 0.0, 0.7),
+        invalid_rgba=(1.0, 1.0, 1.0, 0.7),
+    ):
+        if self.site_ids is None:
+            raise RuntimeError("Heightmap visualization sites not initialized.")
+
+        mask = np.asarray(valid_mask, dtype=bool).reshape(int(res_y), int(res_x))
+        for i in range(int(res_y)):
+            for j in range(int(res_x)):
+                self.model.site_rgba[self.site_ids[i][j]][:] = valid_rgba if mask[i, j] else invalid_rgba
+
+    def get_height_map(self, data, size_x, size_y, res_x, res_y, return_points=False):
         """
         Generate a heightmap by raycasting from the robot's base frame onto the ground.
 
@@ -103,7 +122,7 @@ class MuJoCoUtils:
           1. Computes the 3D position P_world of the grid point in world coordinates (using the robot's pose).
           2. Casts a ray straight downward from height z_max_world above P_world.
           3. Uses mj_rayHfield to measure distance to the heightfield (ground).
-          4. Computes the terrain height and calculates the difference relative to the robot's base height.
+          4. Computes the terrain height and calculates the difference relative to the tilted base plane.
           5. Issues a warning if no intersection is found (assigning a fallback value z_min_world).
           6. Updates the corresponding visualization site’s position and appearance.
 
@@ -116,7 +135,7 @@ class MuJoCoUtils:
 
         Returns:
             numpy.ndarray: A 1D array of length (res_x * res_y), containing the height difference
-                           (robot_z − terrain_z) for each grid cell, flattened row-major.
+                           (grid_point_z − terrain_z) for each grid cell, flattened row-major.
 
         Raises:
             RuntimeError: If init_heightmap_visualization has not been called (self.site_ids is None).
@@ -125,8 +144,12 @@ class MuJoCoUtils:
             raise RuntimeError(
                 "Heightmap visualization sites not initialized. Call init_heightmap_visualization(res_x, res_x) first."
             )
-        if self.hf_geom_id == -1 or int(self.model.geom_type[self.hf_geom_id]) != int(mujoco.mjtGeom.mjGEOM_HFIELD):
-            return np.zeros((int(res_y) * int(res_x),), dtype=np.float64)
+        if self.hf_geom_id == -1:
+            heightmap = np.zeros((int(res_y), int(res_x)), dtype=np.float64)
+            hit_points = np.zeros((int(res_y), int(res_x), 3), dtype=np.float64)
+            if return_points:
+                return heightmap.flatten(), hit_points.reshape(-1, 3)
+            return heightmap.flatten()
 
         # Extract robot base position (x, y, z) and orientation quaternion [w, x, y, z]
         robot_pos = data.qpos[0:3].astype(np.float64)
@@ -147,6 +170,7 @@ class MuJoCoUtils:
         y_robot = np.linspace(y_min_robot, y_max_robot, num_y, dtype=np.float64)
         XX_robot, YY_robot = np.meshgrid(x_robot, y_robot)
         heightmap = np.zeros((num_y, num_x), dtype=np.float64)
+        hit_points = np.zeros((num_y, num_x, 3), dtype=np.float64)
 
         for i in range(num_y):
             for j in range(num_x):
@@ -167,25 +191,32 @@ class MuJoCoUtils:
                 # Ray direction: straight down
                 vec = np.array([[0.0], [0.0], [-1.0]], dtype=np.float64)
 
-                # Perform raycast against heightfield
-                dist = mujoco.mj_rayHfield(self.model, data, self.hf_geom_id, pnt, vec)
-
-                if dist >= 0.0:
-                    # Terrain height = ray_origin_z − dist
-                    terrain_height = pnt[2, 0] - dist
-                    heightmap[i, j] = robot_pos[2] - terrain_height
+                if self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_HFIELD):
+                    dist = mujoco.mj_rayHfield(self.model, data, self.hf_geom_id, pnt, vec)
+                    if dist >= 0.0:
+                        terrain_height = pnt[2, 0] - dist
+                        heightmap[i, j] = P_world[2] - terrain_height
+                    else:
+                        terrain_height = z_min_world
+                        heightmap[i, j] = P_world[2] - z_min_world
+                        warnings.warn("No intersection with heightfield!")
+                elif self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_PLANE):
+                    terrain_height = 0.0
+                    heightmap[i, j] = P_world[2] - terrain_height
                 else:
-                    # No intersection → fallback value + warning
                     terrain_height = z_min_world
-                    heightmap[i, j] = robot_pos[2] - z_min_world
-                    warnings.warn("No intersection with heightfield!")
+                    heightmap[i, j] = P_world[2] - z_min_world
+                    warnings.warn("Unsupported ground geom type for height map visualization.")
 
                 # Update visualization site to the terrain contact point
                 sid = self.site_ids[i][j]
                 data.site_xpos[sid][0] = P_world[0]
                 data.site_xpos[sid][1] = P_world[1]
                 data.site_xpos[sid][2] = terrain_height
+                hit_points[i, j] = [P_world[0], P_world[1], terrain_height]
                 self.model.site_size[sid][0] = 0.01
                 self.model.site_rgba[sid][3] = 0.6
 
+        if return_points:
+            return heightmap.flatten(), hit_points.reshape(-1, 3)
         return heightmap.flatten()

@@ -208,6 +208,8 @@ class FlamingoPV3(MujocoEnv, utils.EzPickle):
             torques_list.append(wheel_torques_clipped)
 
         self.applied_torques = np.concatenate(torques_list)
+
+
         self.do_simulation(self.applied_torques, self.frame_skip)
 
         obs = self._get_obs()

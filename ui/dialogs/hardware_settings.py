@@ -1,9 +1,18 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLabel, QLineEdit, QDialogButtonBox,
-    QScrollArea, QWidget
+    QScrollArea, QWidget, QCheckBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDoubleValidator
+
+
+def _is_float_like(value):
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
 
 class HardwareSettingsDialog(QDialog):
     def __init__(self, hardware_settings, parent):
@@ -29,10 +38,17 @@ class HardwareSettingsDialog(QDialog):
         # Build editable fields for each hardware setting
         for key, value in self.hardware_settings.items():
             label = QLabel(key)
-            le = QLineEdit(str(value))
-            le.setValidator(QDoubleValidator())  # Allow only floating-point input
-            form_layout.addRow(label, le)
-            self.fields[key] = le
+            if isinstance(value, bool):
+                cb = QCheckBox()
+                cb.setChecked(value)
+                form_layout.addRow(label, cb)
+                self.fields[key] = cb
+            else:
+                le = QLineEdit(str(value))
+                if _is_float_like(value):
+                    le.setValidator(QDoubleValidator())  # Allow only floating-point input
+                form_layout.addRow(label, le)
+                self.fields[key] = le
 
         # Set the inner widget inside the scroll area
         scroll.setWidget(inner_widget)
@@ -49,4 +65,10 @@ class HardwareSettingsDialog(QDialog):
 
     def get_settings(self):
         # Return current field values as a dictionary
-        return {key: le.text() for key, le in self.fields.items()}
+        settings = {}
+        for key, widget in self.fields.items():
+            if isinstance(widget, QCheckBox):
+                settings[key] = widget.isChecked()
+            else:
+                settings[key] = widget.text()
+        return settings

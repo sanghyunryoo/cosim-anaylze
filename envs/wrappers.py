@@ -169,6 +169,17 @@ class StateBuildWrapper(BaseEnv):
         return "[" + ", ".join(f"{v: .4f}" for v in arr) + "]"
 
     @staticmethod
+    def _quat_wxyz_to_euler(quat_wxyz: np.ndarray) -> np.ndarray:
+        quat_wxyz = np.asarray(quat_wxyz, dtype=np.float64).reshape(-1)
+        if quat_wxyz.size == 4:
+            quat_xyzw = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]], dtype=np.float64)
+        else:
+            quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+        if np.allclose(quat_xyzw, 0.0):
+            quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+        return StateBuildWrapper._quaternion_to_euler_array(quat_xyzw)
+
+    @staticmethod
     def _build_text_table(title: str, headers, rows) -> str:
         lines = [title, " | ".join(headers)]
         lines.append("-" * max(len(lines[1]), len(title)))
@@ -217,6 +228,25 @@ class StateBuildWrapper(BaseEnv):
             return action
         return np.clip(action * scaler, clip_min, clip_max)
 
+    def _sensor_vector_or_none(self, sensor_name: str):
+        try:
+            return np.asarray(self.env.get_data().sensor(sensor_name).data, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+
+    def _build_imu_rows(self, obs: dict, prefix: str):
+        gyro = np.asarray(obs.get(f"{prefix}_ang_vel", []), dtype=np.float64).reshape(-1)
+        projected_gravity = np.asarray(obs.get(f"{prefix}_projected_gravity", []), dtype=np.float64).reshape(-1)
+        quat_wxyz = self._sensor_vector_or_none(f"{prefix}_imu_orientation")
+        if quat_wxyz is None:
+            return None
+        euler = self._quat_wxyz_to_euler(quat_wxyz)
+        return [
+            ["euler angle [roll, pitch, yaw]", self._format_vector(euler)],
+            ["gyro [x, y, z]", self._format_vector(gyro)],
+            ["projected gravity [x, y, z]", self._format_vector(projected_gravity)],
+        ]
+
     def _print_pretty_observation(self, obs: dict, phase: str):
         data = self.env.get_data()
         pos_joint_names, vel_joint_names = self._get_joint_name_lists()
@@ -233,13 +263,7 @@ class StateBuildWrapper(BaseEnv):
         except Exception:
             quat_wxyz = np.asarray(data.qpos[3:7], dtype=np.float64).reshape(-1)
 
-        if quat_wxyz.size == 4:
-            quat_xyzw = np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]], dtype=np.float64)
-        else:
-            quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-        if np.allclose(quat_xyzw, 0.0):
-            quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-        euler = self._quaternion_to_euler_array(quat_xyzw)
+        euler = self._quat_wxyz_to_euler(quat_wxyz)
 
         joint_rows = []
 
@@ -263,6 +287,8 @@ class StateBuildWrapper(BaseEnv):
             ["projected gravity [x, y, z]", self._format_vector(projected_gravity)],
             ["base height", f"{base_height: .6f}"],
         ]
+        lower_imu_rows = self._build_imu_rows(obs, "lower") if self.id.startswith("humanoid_light") else None
+        upper_imu_rows = self._build_imu_rows(obs, "upper") if self.id.startswith("humanoid_light") else None
 
         if PrettyTable is not None:
             joint_table = PrettyTable()
@@ -285,9 +311,27 @@ class StateBuildWrapper(BaseEnv):
 
             print(joint_table)
             print(imu_table)
+            for title, rows in (
+                (f"{self.id} {phase} Lower IMU State", lower_imu_rows),
+                (f"{self.id} {phase} Upper IMU State", upper_imu_rows),
+            ):
+                if rows is None:
+                    continue
+                imu_link_table = PrettyTable()
+                imu_link_table.title = title
+                imu_link_table.field_names = ["signal", "value"]
+                imu_link_table.align["signal"] = "l"
+                imu_link_table.align["value"] = "l"
+                for row in rows:
+                    imu_link_table.add_row(row)
+                print(imu_link_table)
         else:
             print(self._build_text_table(f"{self.id} {phase} Joint States", ["joint", "joint pos", "joint vel", "action"], joint_rows))
             print(self._build_text_table(f"{self.id} {phase} Base State", ["signal", "value"], imu_rows))
+            if lower_imu_rows is not None:
+                print(self._build_text_table(f"{self.id} {phase} Lower IMU State", ["signal", "value"], lower_imu_rows))
+            if upper_imu_rows is not None:
+                print(self._build_text_table(f"{self.id} {phase} Upper IMU State", ["signal", "value"], upper_imu_rows))
 
     def _concat_obs_with_freq(self, obs, names):
         """

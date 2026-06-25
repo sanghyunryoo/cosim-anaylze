@@ -5,18 +5,28 @@ import numpy as np
 import mujoco
 import glfw
 
-from envs.humanoid_light_v1.manager.control_manager import ControlManager
-from envs.humanoid_light_v1.manager.xml_manager import XMLManager
-from envs.humanoid_light_v1.utils.math_utils import MathUtils
-from envs.humanoid_light_v1.utils.mujoco_utils import MuJoCoUtils
-from envs.humanoid_light_v1.utils.noise_generator_utils import (
+from envs.humanoid_light_v2.manager.control_manager import ControlManager
+from envs.humanoid_light_v2.manager.xml_manager import XMLManager
+from envs.humanoid_light_v2.utils.math_utils import MathUtils
+from envs.humanoid_light_v2.utils.mujoco_utils import MuJoCoUtils
+from envs.humanoid_light_v2.utils.noise_generator_utils import (
     truncated_gaussian_noisy_data,
 )
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
 
 
-class HumanoidLightV1(MujocoEnv, utils.EzPickle):
+def _config_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+
+class HumanoidLightV2(MujocoEnv, utils.EzPickle):
     """
     Updated for URDF-v9 style joints:
       - torso is 3DoF: torso_yaw_joint, torso_pitch_joint, torso_roll_joint
@@ -31,7 +41,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
 
     def __init__(self, config, render_flag=True, render_mode="human"):
         # --- Basic properties ---
-        self.id = "humanoid_light_v1"
+        self.id = "humanoid_light_v2"
         self.config = config
         self.render_mode = render_mode
         self.render_flag = render_flag
@@ -55,7 +65,9 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         self.kp_ankle_pitch = hw.get("Kp_ankle_pitch", 40)
         self.kp_ankle_roll = hw.get("Kp_ankle_roll", 40)
 
-        self.kp_torso = hw.get("Kp_torso", 300)
+        self.kp_torso_yaw = hw.get("Kp_torso_yaw", hw.get("Kp_torso", 300))
+        self.kp_torso_pitch = hw.get("Kp_torso_pitch", hw.get("Kp_torso", 300))
+        self.kp_torso_roll = hw.get("Kp_torso_roll", hw.get("Kp_torso", 300))
         self.kp_head = hw.get("Kp_head", 50)
 
         self.kp_shoulder_pitch = hw.get("Kp_shoulder_pitch", 100)
@@ -80,7 +92,9 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         self.kd_ankle_pitch = hw.get("Kd_ankle_pitch", 2)
         self.kd_ankle_roll = hw.get("Kd_ankle_roll", 2)
 
-        self.kd_torso = hw.get("Kd_torso", 6)
+        self.kd_torso_yaw = hw.get("Kd_torso_yaw", hw.get("Kd_torso", 6))
+        self.kd_torso_pitch = hw.get("Kd_torso_pitch", hw.get("Kd_torso", 6))
+        self.kd_torso_roll = hw.get("Kd_torso_roll", hw.get("Kd_torso", 6))
         self.kd_head = hw.get("Kd_head", 2)
 
         self.kd_shoulder_pitch = hw.get("Kd_shoulder_pitch", 2)
@@ -130,6 +144,14 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
 
         # Head
         self.max_head = float(hw.get("head_joint_max_torque", 5.5))
+        self.coupled_actuator_cfg = hw.get("coupled_actuators", {})
+        coupled_default = _config_bool(hw.get("coupled_enabled", False), False)
+        self.coupled_observation_enabled = _config_bool(
+            hw.get("coupled_observation_enabled", coupled_default), coupled_default
+        )
+        self.coupled_control_enabled = _config_bool(
+            hw.get("coupled_control_enabled", coupled_default), coupled_default
+        )
 
         # --- Simulation properties ---
         precision_level = self.config["random"]["precision"]
@@ -147,6 +169,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         self.action = np.zeros(self.action_dim, dtype=np.float64)
         self.filtered_action = np.zeros(self.action_dim, dtype=np.float64)
         self.prev_action = np.zeros(self.action_dim, dtype=np.float64)
+        self.computed_torques = np.zeros(self.action_dim, dtype=np.float64)
         self.applied_torques = np.zeros(self.action_dim, dtype=np.float64)
         self.ctrl_torques = np.zeros(self.action_dim, dtype=np.float64)
         self.viewer = None
@@ -221,6 +244,7 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             self.action = np.zeros(self.action_dim, dtype=np.float64)
             self.filtered_action = np.zeros(self.action_dim, dtype=np.float64)
             self.prev_action = np.zeros(self.action_dim, dtype=np.float64)
+            self.computed_torques = np.zeros(self.action_dim, dtype=np.float64)
             self.applied_torques = np.zeros(self.action_dim, dtype=np.float64)
             self.ctrl_torques = np.zeros(self.action_dim, dtype=np.float64)
             self.action_scaler = np.ones(self.action_dim, dtype=np.float64)
@@ -232,10 +256,18 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             "dof_pos": dof_dim,
             "dof_vel": dof_dim,
             "ang_vel": 3,
+            "lower_ang_vel": 3,
+            "upper_ang_vel": 3,
+            "lower_imu_ang_vel": 3,
+            "upper_imu_ang_vel": 3,
             "lin_vel_x": 1,
             "lin_vel_y": 1,
             "lin_vel_z": 1,
             "projected_gravity": 3,
+            "lower_projected_gravity": 3,
+            "upper_projected_gravity": 3,
+            "lower_imu_projected_gravity": 3,
+            "upper_imu_projected_gravity": 3,
             "last_action": self.action_dim,
             "height_map": int(self.res_x * self.res_y),
         }
@@ -270,8 +302,140 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         self.policy_from_ctrl_order = np.empty_like(self.ctrl_from_policy_order)
         self.policy_from_ctrl_order[self.ctrl_from_policy_order] = np.arange(len(self.ctrl_from_policy_order))
         self.uses_position_actuators = bool(np.any(self.model.actuator_biastype != 0))
+        self.position_actuator_mask_ctrl = self.model.actuator_biastype != 0
+        self.motor_actuator_mask_ctrl = ~self.position_actuator_mask_ctrl
+        self.uses_hybrid_actuators = bool(
+            np.any(self.position_actuator_mask_ctrl) and np.any(self.motor_actuator_mask_ctrl)
+        )
         self.obs_joint_names_in_order = list(self.joint_names_in_order)
+        self.coupled_pairs = self._build_coupled_pairs()
         self.kp_by_joint, self.kd_by_joint, self.max_torque_by_joint = self._build_pd_vectors()
+        self._validate_position_coupling_assumptions()
+
+    def _coupled_cfg(self, pair_name, default_g1, default_g2, default_mirror):
+        pair_cfg = {}
+        if isinstance(self.coupled_actuator_cfg, dict):
+            pair_cfg = self.coupled_actuator_cfg.get(pair_name, {}) or {}
+
+        hw = self.config["hardware"]
+        coupled_enabled = self.coupled_observation_enabled or self.coupled_control_enabled
+        prefix = pair_name
+        if pair_name in ("left_ankle", "right_ankle"):
+            shared_g1 = hw.get("ankle_gear_ratio_1", hw.get("ankle_gear_ratio", default_g1))
+            shared_g2 = hw.get("ankle_gear_ratio_2", hw.get("ankle_gear_ratio", default_g2))
+        elif pair_name == "torso_pitch_roll":
+            shared_g1 = hw.get("torso_pitch_roll_gear_ratio_1", hw.get("torso_pitch_roll_gear_ratio", default_g1))
+            shared_g2 = hw.get("torso_pitch_roll_gear_ratio_2", hw.get("torso_pitch_roll_gear_ratio", default_g2))
+            prefix = "torso"
+        else:
+            shared_g1 = default_g1
+            shared_g2 = default_g2
+
+        return {
+            "g1": float(pair_cfg.get("gear_ratio_1", hw.get(f"{prefix}_gear_ratio_1", shared_g1))),
+            "g2": float(pair_cfg.get("gear_ratio_2", hw.get(f"{prefix}_gear_ratio_2", shared_g2))),
+            "gamma": float(pair_cfg.get("gamma", hw.get(f"{prefix}_gamma", hw.get("coupled_gamma", 1.0)))),
+            "mirror": _config_bool(pair_cfg.get("mirror", hw.get(f"{prefix}_mirror", default_mirror)), default_mirror),
+            "enabled": coupled_enabled and _config_bool(pair_cfg.get("enabled", hw.get(f"{prefix}_coupled", True)), True),
+        }
+
+    def _build_coupled_pairs(self):
+        pair_defs = [
+            ("left_ankle", ("left_ankle_pitch_joint", "left_ankle_roll_joint"), -2.0, -2.0, False),
+            ("right_ankle", ("right_ankle_pitch_joint", "right_ankle_roll_joint"), -2.0, -2.0, False),
+            ("torso_pitch_roll", ("torso_pitch_joint", "torso_roll_joint"), 1.0, 1.0, False),
+        ]
+        pairs = []
+        for name, joint_names, default_g1, default_g2, default_mirror in pair_defs:
+            cfg = self._coupled_cfg(name, default_g1, default_g2, default_mirror)
+            if not cfg["enabled"]:
+                continue
+            ids = [self.joint_names_in_order.index(joint_name) for joint_name in joint_names]
+            if cfg["g1"] == 0.0 or cfg["g2"] == 0.0:
+                raise ValueError(f"{name} coupled actuator gear ratios must be non-zero.")
+            pairs.append(
+                {
+                    "name": name,
+                    "ids": np.array(ids, dtype=np.int64),
+                    "g1": cfg["g1"],
+                    "g2": cfg["g2"],
+                    "gamma": cfg["gamma"],
+                    "mirror": cfg["mirror"],
+                }
+            )
+        return pairs
+
+    def _joint_to_motor(self, joint_value):
+        motor_value = np.asarray(joint_value, dtype=np.float64).copy()
+        for pair in self.coupled_pairs:
+            ids = pair["ids"]
+            pitch = motor_value[ids[0]]
+            roll = motor_value[ids[1]]
+            g1 = pair["g1"]
+            g2 = pair["g2"]
+            if pair["mirror"]:
+                motor_1 = g1 * (pitch - roll)
+                motor_2 = g2 * (pitch + roll)
+            else:
+                motor_1 = g1 * (pitch + roll)
+                motor_2 = g2 * (pitch - roll)
+            motor_value[ids[0]] = motor_1
+            motor_value[ids[1]] = motor_2
+        return motor_value
+
+    def _motor_to_joint_position(self, motor_value):
+        joint_value = np.asarray(motor_value, dtype=np.float64).copy()
+        for pair in self.coupled_pairs:
+            ids = pair["ids"]
+            motor_1 = motor_value[ids[0]]
+            motor_2 = motor_value[ids[1]]
+            g1 = pair["g1"]
+            g2 = pair["g2"]
+            pitch = 0.5 * (motor_1 / g1 + motor_2 / g2)
+            if pair["mirror"]:
+                roll = 0.5 * (-motor_1 / g1 + motor_2 / g2)
+            else:
+                roll = 0.5 * (motor_1 / g1 - motor_2 / g2)
+            joint_value[ids[0]] = pitch
+            joint_value[ids[1]] = roll
+        return joint_value
+
+    def _validate_position_coupling_assumptions(self):
+        if not self.coupled_control_enabled or not self.uses_position_actuators:
+            return
+        for pair in self.coupled_pairs:
+            ids = pair["ids"]
+            name = pair["name"]
+            if not np.isclose(abs(pair["g1"]), abs(pair["g2"])):
+                raise ValueError(
+                    f"{name} requires |gear_ratio_1| == |gear_ratio_2| for position-mode coupled control."
+                )
+            if not np.isclose(self.kp_by_joint[ids[0]], self.kp_by_joint[ids[1]]):
+                raise ValueError(
+                    f"{name} requires equal Kp for both motor slots for position-mode coupled control."
+                )
+            if not np.isclose(self.kd_by_joint[ids[0]], self.kd_by_joint[ids[1]]):
+                raise ValueError(
+                    f"{name} requires equal Kd for both motor slots for position-mode coupled control."
+                )
+
+    def _motor_to_joint_torque(self, motor_tau):
+        joint_tau = np.asarray(motor_tau, dtype=np.float64).copy()
+        for pair in self.coupled_pairs:
+            ids = pair["ids"]
+            tau_m1 = motor_tau[ids[0]]
+            tau_m2 = motor_tau[ids[1]]
+            g1 = pair["g1"]
+            g2 = pair["g2"]
+            gamma = pair["gamma"]
+            tau_pitch = g1 * tau_m1 + g2 * tau_m2
+            if pair["mirror"]:
+                tau_roll = -g1 * tau_m1 + g2 * tau_m2
+            else:
+                tau_roll = g1 * tau_m1 - g2 * tau_m2
+            joint_tau[ids[0]] = gamma * tau_pitch
+            joint_tau[ids[1]] = gamma * tau_roll
+        return joint_tau
 
     def _build_pd_vectors(self):
         kp = np.zeros(self.action_dim, dtype=np.float64)
@@ -292,11 +456,11 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             elif "ankle_roll" in joint_name:
                 kp[i], kd[i], max_torque[i] = self.kp_ankle_roll, self.kd_ankle_roll, self.max_ankle_roll
             elif "torso_yaw" in joint_name:
-                kp[i], kd[i], max_torque[i] = self.kp_torso, self.kd_torso, self.max_torso_yaw
+                kp[i], kd[i], max_torque[i] = self.kp_torso_yaw, self.kd_torso_yaw, self.max_torso_yaw
             elif "torso_pitch" in joint_name:
-                kp[i], kd[i], max_torque[i] = self.kp_torso, self.kd_torso, self.max_torso_pitch
+                kp[i], kd[i], max_torque[i] = self.kp_torso_pitch, self.kd_torso_pitch, self.max_torso_pitch
             elif "torso_roll" in joint_name:
-                kp[i], kd[i], max_torque[i] = self.kp_torso, self.kd_torso, self.max_torso_roll
+                kp[i], kd[i], max_torque[i] = self.kp_torso_roll, self.kd_torso_roll, self.max_torso_roll
             elif "shoulder_pitch" in joint_name:
                 kp[i], kd[i], max_torque[i] = self.kp_shoulder_pitch, self.kd_shoulder_pitch, self.max_shoulder_pitch
             elif "shoulder_roll" in joint_name:
@@ -317,19 +481,38 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
     # -----------------------
     # Observation
     # -----------------------
+    def _sensor_data_or(self, sensor_name, fallback_name):
+        try:
+            return self.data.sensor(sensor_name).data.astype(np.float64)
+        except KeyError:
+            return self.data.sensor(fallback_name).data.astype(np.float64)
+
+    @staticmethod
+    def _projected_gravity_from_quat(quat_wxyz):
+        quat_xyzw = quat_wxyz[[1, 2, 3, 0]].astype(np.float64)
+        if np.all(quat_xyzw == 0):
+            quat_xyzw = np.array([0, 0, 0, 1], dtype=np.float64)
+        return MathUtils.quat_to_base_vel(quat_xyzw, np.array([0, 0, -1], dtype=np.float64))
+
+    def _sensor_projected_gravity(self, sensor_name, fallback_name="orientation"):
+        return self._projected_gravity_from_quat(self._sensor_data_or(sensor_name, fallback_name))
+
     def _get_obs(self):
         # dof_pos / dof_vel follow self.obs_joint_names_in_order exactly.
         dof_pos = self.data.qpos[self.q_indices].astype(np.float64)
         dof_vel = self.data.qvel[self.qd_indices].astype(np.float64)
+        if self.coupled_observation_enabled:
+            dof_pos = self._joint_to_motor(dof_pos)
+            dof_vel = self._joint_to_motor(dof_vel)
 
         ang_vel = self.data.sensor("angular-velocity").data.astype(np.float64)
+        lower_imu_ang_vel = self._sensor_data_or("lower_imu_angular_velocity", "angular-velocity")
+        upper_imu_ang_vel = self._sensor_data_or("upper_imu_angular_velocity", "angular-velocity")
         lin_vel = self.data.sensor("linear-velocity").data.astype(np.float64)
 
-        quat = self.data.sensor("orientation").data[[1, 2, 3, 0]].astype(np.float64)  # xyzw -> wxyz-like usage below
-        if np.all(quat == 0):
-            quat = np.array([0, 0, 0, 1], dtype=np.float64)
-
-        projected_gravity = MathUtils.quat_to_base_vel(quat, np.array([0, 0, -1], dtype=np.float64))
+        projected_gravity = self._sensor_projected_gravity("orientation")
+        lower_imu_projected_gravity = self._sensor_projected_gravity("lower_imu_orientation")
+        upper_imu_projected_gravity = self._sensor_projected_gravity("upper_imu_orientation")
 
         if self.config["observation"].get("height_map", None) is not None:
             height_map = self.mujoco_utils.get_height_map(
@@ -360,6 +543,20 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             lower=self.sensor_noise_map["ang_vel"]["lower"],
             upper=self.sensor_noise_map["ang_vel"]["upper"],
         )
+        lower_imu_ang_vel_noisy = truncated_gaussian_noisy_data(
+            lower_imu_ang_vel,
+            mean=self.sensor_noise_map["ang_vel"]["mean"],
+            std=self.sensor_noise_map["ang_vel"]["std"],
+            lower=self.sensor_noise_map["ang_vel"]["lower"],
+            upper=self.sensor_noise_map["ang_vel"]["upper"],
+        )
+        upper_imu_ang_vel_noisy = truncated_gaussian_noisy_data(
+            upper_imu_ang_vel,
+            mean=self.sensor_noise_map["ang_vel"]["mean"],
+            std=self.sensor_noise_map["ang_vel"]["std"],
+            lower=self.sensor_noise_map["ang_vel"]["lower"],
+            upper=self.sensor_noise_map["ang_vel"]["upper"],
+        )
         lin_vel_noisy = truncated_gaussian_noisy_data(
             lin_vel,
             mean=self.sensor_noise_map["lin_vel"]["mean"],
@@ -369,6 +566,20 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         )
         projected_gravity_noisy = truncated_gaussian_noisy_data(
             projected_gravity,
+            mean=self.sensor_noise_map["projected_gravity"]["mean"],
+            std=self.sensor_noise_map["projected_gravity"]["std"],
+            lower=self.sensor_noise_map["projected_gravity"]["lower"],
+            upper=self.sensor_noise_map["projected_gravity"]["upper"],
+        )
+        lower_imu_projected_gravity_noisy = truncated_gaussian_noisy_data(
+            lower_imu_projected_gravity,
+            mean=self.sensor_noise_map["projected_gravity"]["mean"],
+            std=self.sensor_noise_map["projected_gravity"]["std"],
+            lower=self.sensor_noise_map["projected_gravity"]["lower"],
+            upper=self.sensor_noise_map["projected_gravity"]["upper"],
+        )
+        upper_imu_projected_gravity_noisy = truncated_gaussian_noisy_data(
+            upper_imu_projected_gravity,
             mean=self.sensor_noise_map["projected_gravity"]["mean"],
             std=self.sensor_noise_map["projected_gravity"]["std"],
             lower=self.sensor_noise_map["projected_gravity"]["lower"],
@@ -390,10 +601,18 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
             "dof_pos": dof_pos_noisy,
             "dof_vel": dof_vel_noisy,
             "ang_vel": ang_vel_noisy,
+            "lower_ang_vel": lower_imu_ang_vel_noisy,
+            "upper_ang_vel": upper_imu_ang_vel_noisy,
+            "lower_imu_ang_vel": lower_imu_ang_vel_noisy,
+            "upper_imu_ang_vel": upper_imu_ang_vel_noisy,
             "lin_vel_x": float(lin_vel_noisy[0]),
             "lin_vel_y": float(lin_vel_noisy[1]),
             "lin_vel_z": float(lin_vel_noisy[2]),
             "projected_gravity": projected_gravity_noisy,
+            "lower_projected_gravity": lower_imu_projected_gravity_noisy,
+            "upper_projected_gravity": upper_imu_projected_gravity_noisy,
+            "lower_imu_projected_gravity": lower_imu_projected_gravity_noisy,
+            "upper_imu_projected_gravity": upper_imu_projected_gravity_noisy,
             "height_map": height_map_noisy,
             "last_action": self.action.astype(np.float64),
         }
@@ -401,9 +620,15 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
     def _update_pd_torques(self, action_scaled):
         dof_pos = self.data.qpos[self.q_indices].astype(np.float64)
         dof_vel = self.data.qvel[self.qd_indices].astype(np.float64)
-        torques = self.kp_by_joint * (action_scaled - dof_pos) - self.kd_by_joint * dof_vel
+        if self.coupled_control_enabled:
+            dof_pos = self._joint_to_motor(dof_pos)
+            dof_vel = self._joint_to_motor(dof_vel)
+        kd = np.zeros_like(self.kd_by_joint) if not self.uses_position_actuators else self.kd_by_joint
+        motor_torques = self.kp_by_joint * (action_scaled - dof_pos) - kd * dof_vel
+        joint_torques = self._motor_to_joint_torque(motor_torques) if self.coupled_control_enabled else motor_torques
+        self.computed_torques = joint_torques.astype(np.float64)
         self.applied_torques = np.clip(
-            torques,
+            joint_torques,
             -self.max_torque_by_joint,
             self.max_torque_by_joint,
         ).astype(np.float64)
@@ -417,8 +642,17 @@ class HumanoidLightV1(MujocoEnv, utils.EzPickle):
         self.action = np.asarray(action, dtype=np.float64)
         self.filtered_action = self.control_manager.delay_filter(self.action)
         action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
-        if self.uses_position_actuators:
-            self.do_simulation(action_scaled[self.ctrl_from_policy_order], self.frame_skip)
+        position_targets = self._motor_to_joint_position(action_scaled) if self.coupled_control_enabled else action_scaled
+        if self.uses_hybrid_actuators:
+            ctrl = position_targets[self.ctrl_from_policy_order].copy()
+            motor_torques = self._update_pd_torques(action_scaled)
+            ctrl[self.motor_actuator_mask_ctrl] = motor_torques[self.motor_actuator_mask_ctrl]
+            self.do_simulation(ctrl, self.frame_skip)
+            actuator_force = self.data.actuator_force.astype(np.float64)
+            self.ctrl_torques = actuator_force.copy()
+            self.applied_torques = actuator_force[self.policy_from_ctrl_order].copy()
+        elif self.uses_position_actuators:
+            self.do_simulation(position_targets[self.ctrl_from_policy_order], self.frame_skip)
             actuator_force = self.data.actuator_force.astype(np.float64)
             self.ctrl_torques = actuator_force.copy()
             self.applied_torques = actuator_force[self.policy_from_ctrl_order].copy()

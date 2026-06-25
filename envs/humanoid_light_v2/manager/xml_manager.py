@@ -4,6 +4,16 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 
+def _config_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+
 class XMLManager:
     def __init__(self, config):
         self.config = config
@@ -22,9 +32,23 @@ class XMLManager:
             "right_hip_pitch_link", "right_hip_roll_link", "right_hip_yaw_link",
             "right_knee_link", "right_ankle_pitch_link", "right_ankle_roll_link",
             
-            "head_link", "head_cam_link", "lower_cam_link"]
+            "head_link", "head_cam_link", "lower_cam_link",
+            "lower_imu_link", "upper_imu_link"]
 
         self.precision_attr_map = config["random_table"]["precision"]
+
+    def _actuator_mode(self):
+        mode = str(
+            self.config["hardware"].get(
+                "actuator_mode",
+                self.config["hardware"].get("control_mode", "position"),
+            )
+        ).strip().lower()
+        if mode == "motor":
+            mode = "torque"
+        if mode not in ("position", "torque"):
+            raise ValueError("humanoid_light_v2 hardware.actuator_mode must be 'position' or 'torque'.")
+        return mode
 
     def _pd_gains_for_joint(self, joint_name):
         hw = self.config["hardware"]
@@ -40,8 +64,12 @@ class XMLManager:
             return hw.get("Kp_ankle_pitch", 40), hw.get("Kd_ankle_pitch", 2)
         if "ankle_roll" in joint_name:
             return hw.get("Kp_ankle_roll", 40), hw.get("Kd_ankle_roll", 2)
-        if "torso" in joint_name:
-            return hw.get("Kp_torso", 300), hw.get("Kd_torso", 6)
+        if "torso_yaw" in joint_name:
+            return hw.get("Kp_torso_yaw", hw.get("Kp_torso", 300)), hw.get("Kd_torso_yaw", hw.get("Kd_torso", 6))
+        if "torso_pitch" in joint_name:
+            return hw.get("Kp_torso_pitch", hw.get("Kp_torso", 300)), hw.get("Kd_torso_pitch", hw.get("Kd_torso", 6))
+        if "torso_roll" in joint_name:
+            return hw.get("Kp_torso_roll", hw.get("Kp_torso", 300)), hw.get("Kd_torso_roll", hw.get("Kd_torso", 6))
         if "shoulder_pitch" in joint_name:
             return hw.get("Kp_shoulder_pitch", 100), hw.get("Kd_shoulder_pitch", 2)
         if "shoulder_roll" in joint_name:
@@ -56,14 +84,204 @@ class XMLManager:
             return hw.get("Kp_head", 50), hw.get("Kd_head", 2)
         return 100, 2
 
+    def _torque_limit_for_joint(self, joint_name):
+        hw = self.config["hardware"]
+        if "hip_pitch" in joint_name:
+            return float(hw.get("hip_pitch_joint_max_torque", 120))
+        if "hip_roll" in joint_name:
+            return float(hw.get("hip_roll_joint_max_torque", 60))
+        if "hip_yaw" in joint_name:
+            return float(hw.get("hip_yaw_joint_max_torque", 60))
+        if "knee" in joint_name:
+            return float(hw.get("knee_joint_max_torque", 120))
+        if "ankle_pitch" in joint_name:
+            return float(hw.get("ankle_pitch_joint_max_torque", 14))
+        if "ankle_roll" in joint_name:
+            return float(hw.get("ankle_roll_joint_max_torque", 14))
+        if "torso_yaw" in joint_name:
+            return float(hw.get("torso_yaw_joint_max_torque", hw.get("torso_joint_max_torque", 60)))
+        if "torso_pitch" in joint_name:
+            return float(hw.get("torso_pitch_joint_max_torque", hw.get("torso_joint_max_torque", 60)))
+        if "torso_roll" in joint_name:
+            return float(hw.get("torso_roll_joint_max_torque", hw.get("torso_joint_max_torque", 60)))
+        if "shoulder_pitch" in joint_name:
+            return float(hw.get("shoulder_pitch_joint_max_torque", 60))
+        if "shoulder_roll" in joint_name:
+            return float(hw.get("shoulder_roll_joint_max_torque", 60))
+        if "shoulder_yaw" in joint_name:
+            return float(hw.get("shoulder_yaw_joint_max_torque", 17))
+        if "elbow" in joint_name:
+            return float(hw.get("elbow_joint_max_torque", 36))
+        if "wrist" in joint_name:
+            return float(hw.get("wrist_joint_max_torque", 14))
+        if "head" in joint_name:
+            return float(hw.get("head_joint_max_torque", 5.5))
+        return 100.0
+
+    def _coupled_control_joint_names(self):
+        hw = self.config["hardware"]
+        if not _config_bool(hw.get("coupled_control_enabled", hw.get("coupled_enabled", False)), False):
+            return set()
+
+        coupled_cfg = hw.get("coupled_actuators", {})
+
+        def pair_enabled(pair_name, legacy_key):
+            pair_cfg = coupled_cfg.get(pair_name, {}) if isinstance(coupled_cfg, dict) else {}
+            return _config_bool(pair_cfg.get("enabled", hw.get(legacy_key, True)), True)
+
+        joint_names = set()
+        if pair_enabled("left_ankle", "left_ankle_coupled"):
+            joint_names.update(("left_ankle_pitch_joint", "left_ankle_roll_joint"))
+        if pair_enabled("right_ankle", "right_ankle_coupled"):
+            joint_names.update(("right_ankle_pitch_joint", "right_ankle_roll_joint"))
+        if pair_enabled("torso_pitch_roll", "torso_coupled"):
+            joint_names.update(("torso_pitch_joint", "torso_roll_joint"))
+        return joint_names
+
+    def _coupled_position_gains_by_joint(self):
+        hw = self.config["hardware"]
+        if not _config_bool(hw.get("coupled_control_enabled", hw.get("coupled_enabled", False)), False):
+            return {}
+
+        coupled_cfg = hw.get("coupled_actuators", {})
+        pair_defs = [
+            ("left_ankle", ("left_ankle_pitch_joint", "left_ankle_roll_joint"), -2.0, -2.0, False, "left_ankle"),
+            ("right_ankle", ("right_ankle_pitch_joint", "right_ankle_roll_joint"), -2.0, -2.0, False, "right_ankle"),
+            ("torso_pitch_roll", ("torso_pitch_joint", "torso_roll_joint"), 1.0, 1.0, False, "torso"),
+        ]
+
+        gains_by_joint = {}
+        for pair_name, joint_names, default_g1, default_g2, default_mirror, prefix in pair_defs:
+            pair_cfg = coupled_cfg.get(pair_name, {}) if isinstance(coupled_cfg, dict) else {}
+            if not _config_bool(pair_cfg.get("enabled", hw.get(f"{prefix}_coupled", True)), True):
+                continue
+
+            if pair_name in ("left_ankle", "right_ankle"):
+                shared_g1 = hw.get("ankle_gear_ratio_1", hw.get("ankle_gear_ratio", default_g1))
+                shared_g2 = hw.get("ankle_gear_ratio_2", hw.get("ankle_gear_ratio", default_g2))
+            else:
+                shared_g1 = hw.get("torso_pitch_roll_gear_ratio_1", hw.get("torso_pitch_roll_gear_ratio", default_g1))
+                shared_g2 = hw.get("torso_pitch_roll_gear_ratio_2", hw.get("torso_pitch_roll_gear_ratio", default_g2))
+
+            g1 = float(pair_cfg.get("gear_ratio_1", hw.get(f"{prefix}_gear_ratio_1", shared_g1)))
+            g2 = float(pair_cfg.get("gear_ratio_2", hw.get(f"{prefix}_gear_ratio_2", shared_g2)))
+            gamma = float(pair_cfg.get("gamma", hw.get(f"{prefix}_gamma", hw.get("coupled_gamma", 1.0))))
+            if g1 == 0.0 or g2 == 0.0:
+                raise ValueError(f"{pair_name} coupled actuator gear ratios must be non-zero.")
+            if not np.isclose(abs(g1), abs(g2)):
+                raise ValueError(
+                    f"{pair_name} requires |gear_ratio_1| == |gear_ratio_2| for position-mode coupled control."
+                )
+
+            kp1, kd1 = self._pd_gains_for_joint(joint_names[0])
+            kp2, kd2 = self._pd_gains_for_joint(joint_names[1])
+            if not np.isclose(float(kp1), float(kp2)):
+                raise ValueError(f"{pair_name} requires equal Kp for both motor slots for position-mode coupled control.")
+            if not np.isclose(float(kd1), float(kd2)):
+                raise ValueError(f"{pair_name} requires equal Kd for both motor slots for position-mode coupled control.")
+
+            gain_scale = 2.0 * abs(g1) * abs(g1) * gamma
+            equivalent_gains = (gain_scale * float(kp1), gain_scale * float(kd1))
+            gains_by_joint[joint_names[0]] = equivalent_gains
+            gains_by_joint[joint_names[1]] = equivalent_gains
+        return gains_by_joint
+
+    @staticmethod
+    def _ensure_imu_links_and_sensors(root):
+        asset = root.find("asset")
+        if asset is None:
+            asset = ET.SubElement(root, "asset")
+
+        existing_meshes = {mesh.attrib.get("name") for mesh in asset.findall("mesh")}
+        for mesh_name in ("lower_imu_link", "upper_imu_link"):
+            if mesh_name not in existing_meshes:
+                ET.SubElement(
+                    asset,
+                    "mesh",
+                    {"name": mesh_name, "file": f"../mesh_v2/{mesh_name}.STL"},
+                )
+                existing_meshes.add(mesh_name)
+
+        imu_links = {
+            "lower_imu_link": {
+                "parent": "pelvis_link",
+                "pos": "0 0 0",
+                "mesh": "lower_imu_link",
+                "sensor_prefix": "lower_imu",
+            },
+            "upper_imu_link": {
+                "parent": "torso_roll_link",
+                "pos": "0.00075 0.368 0.000183254044262509",
+                "quat": "0.5 -0.5 -0.5 -0.5",
+                "mesh": "upper_imu_link",
+                "sensor_prefix": "upper_imu",
+            },
+        }
+
+        for parent in root.findall(".//body"):
+            for child in list(parent.findall("./body")):
+                if child.attrib.get("name") in {"lower_imu", "upper_imu", *imu_links.keys()}:
+                    parent.remove(child)
+
+        for body_name, cfg in imu_links.items():
+            parent = root.find(f".//body[@name='{cfg['parent']}']")
+            if parent is None:
+                continue
+
+            body_attrib = {"name": body_name, "pos": cfg["pos"]}
+            if "quat" in cfg:
+                body_attrib["quat"] = cfg["quat"]
+            body = ET.Element("body", body_attrib)
+            body.append(
+                ET.Element(
+                    "geom",
+                    {
+                        "name": f"{cfg['mesh']}_visual",
+                        "type": "mesh",
+                        "mesh": cfg["mesh"],
+                        "class": "visual",
+                    },
+                )
+            )
+            body.append(
+                ET.Element(
+                    "site",
+                    {
+                        "name": f"{cfg['sensor_prefix']}_site",
+                        "size": "0.01",
+                        "pos": "0 0 0",
+                        "quat": "1 0 0 0",
+                    },
+                )
+            )
+            parent.insert(0, body)
+
+        sensor = root.find("sensor")
+        if sensor is None:
+            sensor = ET.SubElement(root, "sensor")
+
+        existing_names = {elem.attrib.get("name") for elem in sensor}
+        for imu_name in ("lower_imu", "upper_imu"):
+            site_name = f"{imu_name}_site"
+            for tag, attrib in [
+                ("framequat", {"name": f"{imu_name}_orientation", "objtype": "site", "objname": site_name}),
+                ("gyro", {"name": f"{imu_name}_angular_velocity", "site": site_name, "cutoff": "34.9"}),
+                ("velocimeter", {"name": f"{imu_name}_linear_velocity", "site": site_name, "cutoff": "30"}),
+                ("accelerometer", {"name": f"{imu_name}_linear_acceleration", "site": site_name, "cutoff": "157"}),
+            ]:
+                if attrib["name"] not in existing_names:
+                    sensor.append(ET.Element(tag, attrib))
+                    existing_names.add(attrib["name"])
+
     def get_model_path(self):
         # The current Isaac policy was trained from the URDF/USD model, not the
         # older hand-edited mesh_v2 XML.  Use the URDF-converted MuJoCo model so
         # principal-axis inertias, convex collision meshes, and fixed-joint
         # merges match the training asset as closely as this sim-to-sim path can.
-        original_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'humanoid_light_v1_from_urdf.xml')
+        original_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'humanoid_light_v2_from_urdf.xml')
         tree = ET.parse(original_model_path)
         root = tree.getroot()
+        self._ensure_imu_links_and_sensors(root)
 
         # Keep URDF-converted convex meshes for collision, but use the decimated
         # mesh_v2 assets for visuals.  The mesh_v2 files are the MuJoCo-safe
@@ -194,15 +412,18 @@ class XMLManager:
                     if 'frictionloss' in joint.attrib:
                         joint.attrib['frictionloss'] = str(self.config["random"]["friction_loss"])
 
-        # Use MuJoCo position actuators for this policy.  The Isaac action is a
-        # joint-position target; this path matches the stable behavior of the
-        # trained policy better than re-integrating the PD torque explicitly.
+        actuator_mode = self._actuator_mode()
+        coupled_position_gains = self._coupled_position_gains_by_joint() if actuator_mode == "position" else {}
         joint_ranges = {}
         for joint in root.findall(".//joint"):
             joint_name = joint.attrib.get("name")
             if not joint_name:
                 continue
-            _, kd = self._pd_gains_for_joint(joint_name)
+            if joint_name in coupled_position_gains:
+                _, kd = coupled_position_gains[joint_name]
+                joint.attrib["frictionloss"] = str(self.config["random"]["friction_loss"])
+            else:
+                _, kd = self._pd_gains_for_joint(joint_name)
             joint.attrib["damping"] = str(kd)
             joint_ranges[joint_name] = joint.attrib.get("range", "-3.14 3.14")
 
@@ -212,12 +433,23 @@ class XMLManager:
                 joint_name = actuator_elem.attrib.get("joint")
                 if not joint_name:
                     continue
-                kp, _ = self._pd_gains_for_joint(joint_name)
-                actuator_elem.tag = "position"
-                actuator_elem.attrib.pop("gear", None)
-                actuator_elem.attrib["kp"] = str(kp)
-                actuator_elem.attrib["ctrllimited"] = "true"
-                actuator_elem.attrib["ctrlrange"] = joint_ranges.get(joint_name, "-3.14 3.14")
+                if actuator_mode == "position":
+                    if joint_name in coupled_position_gains:
+                        kp, _ = coupled_position_gains[joint_name]
+                    else:
+                        kp, _ = self._pd_gains_for_joint(joint_name)
+                    actuator_elem.tag = "position"
+                    actuator_elem.attrib.pop("gear", None)
+                    actuator_elem.attrib["kp"] = str(kp)
+                    actuator_elem.attrib["ctrllimited"] = "true"
+                    actuator_elem.attrib["ctrlrange"] = joint_ranges.get(joint_name, "-3.14 3.14")
+                else:
+                    torque_limit = self._torque_limit_for_joint(joint_name)
+                    actuator_elem.tag = "motor"
+                    actuator_elem.attrib.pop("kp", None)
+                    actuator_elem.attrib["gear"] = actuator_elem.attrib.get("gear", "1")
+                    actuator_elem.attrib["ctrllimited"] = "true"
+                    actuator_elem.attrib["ctrlrange"] = f"{-torque_limit} {torque_limit}"
 
         # 7. Initialize spheres for height map
         if self.config["observation"]["height_map"] is not None:
@@ -296,6 +528,6 @@ class XMLManager:
             for body2 in body_names[i + 1:]:
                 ET.SubElement(contact, "exclude", {"body1": body1, "body2": body2})
 
-        randomized_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'applied_humanoid_p_v0.xml')
+        randomized_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'applied_humanoid_light_v2.xml')
         tree.write(randomized_model_path)
         return randomized_model_path

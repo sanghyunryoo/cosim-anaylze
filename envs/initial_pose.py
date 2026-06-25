@@ -1,7 +1,5 @@
 import numpy as np
 
-from envs.flamingo_p_v3.utils.noise_generator_utils import uniform_noisy_data
-
 
 INITIAL_POSE_METADATA = {
     "wheeldog_p_v2": {
@@ -100,8 +98,8 @@ INITIAL_POSE_METADATA = {
             "left_elbow_yaw_joint", "right_elbow_yaw_joint",
         ],
     },
-    "humanoid_light_v1": {
-        "base_z": 0.70,
+    "humanoid_light_v2": {
+        "base_z": 0.75,
         "joint_names": [
             "left_hip_pitch_joint",
             "left_hip_roll_joint",
@@ -146,8 +144,24 @@ def get_default_initial_joint_map(env_id):
     return {name: 0.0 for name in get_initial_pose_joint_names(env_id)}
 
 
+def get_default_initial_pose(env_id):
+    metadata = get_initial_pose_metadata(env_id)
+    return {
+        "base_z": float(metadata["base_z"]),
+        "joints": get_default_initial_joint_map(env_id),
+    }
+
+
+def _initial_pose_config(config):
+    for key in ("initial_positions", "initial_pose", "joint_offsets"):
+        raw = config.get(key, {}) or {}
+        if isinstance(raw, dict) and raw:
+            return raw
+    return {}
+
+
 def _normalize_joint_overrides(config):
-    raw = config.get("initial_positions", {}) or {}
+    raw = _initial_pose_config(config)
     if not isinstance(raw, dict):
         return {}
     joints = raw.get("joints", raw)
@@ -162,13 +176,26 @@ def _normalize_joint_overrides(config):
     return normalized
 
 
+def _base_z_override(config, default_base_z):
+    raw = _initial_pose_config(config)
+    if not isinstance(raw, dict):
+        return float(default_base_z)
+    for key in ("base_z", "z"):
+        if key in raw:
+            try:
+                return float(raw[key])
+            except Exception:
+                break
+    return float(default_base_z)
+
+
 def build_initial_qpos(model, mujoco_utils, config, env_id, init_noise, joint_names=None):
     metadata = get_initial_pose_metadata(env_id)
     resolved_joint_names = list(joint_names or metadata["joint_names"])
     joint_overrides = _normalize_joint_overrides(config)
 
     qpos = np.zeros(model.nq, dtype=np.float64)
-    qpos[2] = float(metadata["base_z"])
+    qpos[2] = _base_z_override(config, metadata["base_z"])
     qpos[3:7] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
 
     if not resolved_joint_names:
@@ -180,6 +207,6 @@ def build_initial_qpos(model, mujoco_utils, config, env_id, init_noise, joint_na
         dtype=np.float64,
     )
     if init_noise > 0.0:
-        joint_values = uniform_noisy_data(joint_values, lower=-init_noise, upper=init_noise)
+        joint_values = joint_values + np.random.uniform(-init_noise, init_noise, size=joint_values.shape)
     qpos[q_indices] = joint_values
     return qpos

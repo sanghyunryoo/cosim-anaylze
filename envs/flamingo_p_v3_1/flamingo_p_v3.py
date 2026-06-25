@@ -11,6 +11,7 @@ from envs.flamingo_p_v3_1.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_p_v3_1.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.camera_height_map import build_camera_height_map
 from envs.masked_height_map import masked_height_map, parse_camera_fovs_from_xml
 
 
@@ -83,9 +84,48 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             self.size_y = self.config["observation"]["height_map"]["size_y"]
             self.res_x = self.config["observation"]["height_map"]["res_x"]
             self.res_y = self.config["observation"]["height_map"]["res_y"]
+            self.height_map_target_height = float(
+                self.config["observation"]["height_map"].get("target_height", 0.33)
+            )
+            self.height_map_clipping_min = float(
+                self.config["observation"]["height_map"].get("clipping_min", 0.0)
+            )
+            self.height_map_clipping_max = float(
+                self.config["observation"]["height_map"].get("clipping_max", 0.33)
+            )
+            self.camera_height_map_point_stride = int(
+                self.config["observation"]["height_map"].get("point_stride", 16)
+            )
+            self.camera_height_map_max_range = float(
+                self.config["observation"]["height_map"].get("max_range", 2.5)
+            )
+            self.camera_height_map_update_freq = float(
+                self.config["observation"]["height_map"].get("camera_update_freq", 10.0)
+            )
+            self.height_map_debug_print = bool(
+                self.config["observation"]["height_map"].get("debug_print", False)
+            )
         else:
             self.res_x = 0
             self.res_y = 0
+            self.height_map_target_height = 0.33
+            self.height_map_clipping_min = 0.0
+            self.height_map_clipping_max = 0.33
+            self.camera_height_map_point_stride = 16
+            self.camera_height_map_max_range = 2.5
+            self.camera_height_map_update_freq = 10.0
+            self.height_map_debug_print = False
+        if self.height_map_clipping_min > self.height_map_clipping_max:
+            self.height_map_clipping_min, self.height_map_clipping_max = (
+                self.height_map_clipping_max,
+                self.height_map_clipping_min,
+            )
+        self.camera_height_map_update_interval = max(
+            1,
+            int(round(self.control_freq / max(1e-6, self.camera_height_map_update_freq))),
+        )
+        self._camera_height_map_cache = None
+        self._camera_height_map_cache_step = -1
 
         # Set dimensions of observations
         # dof_pos: 항상 6(힙/숄더/레그), dof_vel: 바퀴 있으면 8, 없으면 6
@@ -100,6 +140,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             "last_action": self.action_dim,
             "height_map": int(self.res_x * self.res_y),
             "masked_height_map": int(self.res_x * self.res_y),
+            "camera_height_map": int(self.res_x * self.res_y),
         }
 
         # Set MuJoCo Wrapper
@@ -138,6 +179,8 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
 
     def _debug_print_height_maps(self, height_map, masked_height_map):
+        if not self.height_map_debug_print:
+            return
         interval = max(1, int(round(self.control_freq)))
         if self.local_step % interval != 0:
             return
@@ -179,21 +222,48 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
                     self.res_y,
                     return_points=True,
                 )
+            raw_height_map = height_map
+            height_map = np.clip(raw_height_map, self.height_map_clipping_min, self.height_map_clipping_max)
+            masked_height_source = np.clip(raw_height_map, 0.0, self.height_map_target_height)
             masked_map, fov_valid_mask = masked_height_map(
                 self.model,
                 self.data,
-                height_map,
+                masked_height_source,
                 height_points_w,
                 self.height_map_cameras,
                 base_height=float(self.data.qpos[2]),
                 offset=0.5,
-                fill_value=0.5,
+                fill_value=self.height_map_target_height,
                 return_valid_mask=True,
             )
+            masked_map = np.clip(masked_map, 0.0, self.height_map_target_height)
+            if (
+                self._camera_height_map_cache is None
+                or self.local_step - self._camera_height_map_cache_step >= self.camera_height_map_update_interval
+            ):
+                self._camera_height_map_cache = build_camera_height_map(
+                    self.model,
+                    self.data,
+                    camera_name="depth_camera",
+                    camera_body_name="camera_link",
+                    grid_body_name="base_link",
+                    size_x=self.size_x,
+                    size_y=self.size_y,
+                    res_x=self.res_x,
+                    res_y=self.res_y,
+                    target_height=self.height_map_target_height,
+                    clipping_min=self.height_map_clipping_min,
+                    clipping_max=self.height_map_clipping_max,
+                    max_range=self.camera_height_map_max_range,
+                    point_stride=self.camera_height_map_point_stride,
+                )
+                self._camera_height_map_cache_step = self.local_step
+            camera_map = self._camera_height_map_cache
             self.mujoco_utils.color_heightmap_by_mask(fov_valid_mask, self.res_x, self.res_y)
         else:
             height_map = None
             masked_map = None
+            camera_map = None
 
         dof_pos_noisy = truncated_gaussian_noisy_data(dof_pos, **self.sensor_noise_map["dof_pos"])
         dof_vel_noisy = truncated_gaussian_noisy_data(dof_vel, **self.sensor_noise_map["dof_vel"])
@@ -202,6 +272,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
         projected_gravity_noisy = truncated_gaussian_noisy_data(projected_gravity, **self.sensor_noise_map["projected_gravity"])
         height_map_noisy = truncated_gaussian_noisy_data(height_map, **self.sensor_noise_map["height_map"])
         masked_height_map_noisy = truncated_gaussian_noisy_data(masked_map, **self.sensor_noise_map["height_map"])
+        camera_height_map_noisy = truncated_gaussian_noisy_data(camera_map, **self.sensor_noise_map["height_map"])
         if height_map is not None and masked_map is not None:
             self._debug_print_height_maps(height_map, masked_map)
         return {
@@ -214,6 +285,7 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
             "projected_gravity": projected_gravity_noisy,
             "height_map": height_map_noisy,
             "masked_height_map": masked_height_map_noisy,
+            "camera_height_map": camera_height_map_noisy,
             "last_action": self.action,
         }
 
@@ -320,6 +392,8 @@ class FlamingoPV31(MujocoEnv, utils.EzPickle):
 
     def reset_model(self):
         self.local_step = 0
+        self._camera_height_map_cache = None
+        self._camera_height_map_cache_step = -1
         self.action = np.zeros(self.action_dim)
         self.prev_action = np.zeros(self.action_dim)
         self.control_manager.reset()

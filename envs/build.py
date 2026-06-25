@@ -7,7 +7,7 @@ from envs.bon_p_v1.bon_p_v1 import BonPV1
 from envs.wheeldog_p_v0.wheeldog_p_v0 import WheelDogPV0
 from envs.wheeldog_p_v2.wheeldog_p_v2 import WheelDogPV2
 from envs.humanoid_p_v0.humanoid_p_v0 import HumanoidPV0
-from envs.humanoid_light_v1.humanoid_light_v1 import HumanoidLightV1
+from envs.humanoid_light_v2.humanoid_light_v2 import HumanoidLightV2
 from envs.wrappers import StateBuildWrapper, TimeLimitWrapper, CommandWrapper
 
 
@@ -39,8 +39,8 @@ def build_env(config):
       env = WheelDogPV2(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "humanoid_p_v0":
       env = HumanoidPV0(config, render_flag=render_flag, render_mode=render_mode)
-    elif config["env"]['id'] == "humanoid_light_v1":
-      env = HumanoidLightV1(config, render_flag=render_flag, render_mode=render_mode)
+    elif config["env"]['id'] == "humanoid_light_v2":
+      env = HumanoidLightV2(config, render_flag=render_flag, render_mode=render_mode)
     else:
       raise NameError(f"Please select a valid environment id. Received '{config['env']['id']}'.")
     

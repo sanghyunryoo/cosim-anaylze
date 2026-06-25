@@ -31,7 +31,8 @@ What gets returned by get_settings()
   "command_scales": { "0": float, "1": float, ... },
   "height_map": {
       "size_x": float, "size_y": float, "res_x": int, "res_y": int,
-      "freq": int, "scale": float
+      "freq": int, "scale": float, "target_height": float,
+      "clipping_min": float, "clipping_max": float
   } or None,
   # Per-observation entries (for each obs in self.obs_types). If present in any order,
   # value is {"freq": int, "scale": float}, otherwise None.
@@ -72,7 +73,13 @@ class ObservationSettingsDialog(QDialog):
         self.obs_types = [
             "dof_pos", "dof_vel", "ang_vel",
             "lin_vel_x", "lin_vel_y", "lin_vel_z",
-            "projected_gravity", "height_map", "masked_height_map", "last_action"
+            "projected_gravity",
+            "lower_ang_vel", "upper_ang_vel",
+            "lower_projected_gravity", "upper_projected_gravity",
+            "lower_imu_ang_vel", "upper_imu_ang_vel",
+            "lower_imu_projected_gravity", "upper_imu_projected_gravity",
+            "height_map", "masked_height_map", "camera_height_map",
+            "last_action",
         ]
 
         # Saved settings (highest priority source)
@@ -184,11 +191,26 @@ class ObservationSettingsDialog(QDialog):
             "size_y": to_float(hm_settings.get("size_y", hm_yaml.get("size_y", 0.6))),
             "res_x": to_int(hm_settings.get("res_x", hm_yaml.get("res_x", 15))),
             "res_y": to_int(hm_settings.get("res_y", hm_yaml.get("res_y", 9))),
+            "target_height": to_float(hm_settings.get("target_height", hm_yaml.get("target_height", 0.5))),
+            "clipping_min": to_float(hm_settings.get("clipping_min", hm_yaml.get("clipping_min", 0.0))),
+            "clipping_max": to_float(hm_settings.get("clipping_max", hm_yaml.get("clipping_max", 0.33))),
+            "point_stride": to_int(hm_settings.get("point_stride", hm_yaml.get("point_stride", 16))),
+            "max_range": to_float(hm_settings.get("max_range", hm_yaml.get("max_range", 2.5))),
+            "camera_update_freq": to_float(
+                hm_settings.get("camera_update_freq", hm_yaml.get("camera_update_freq", 10.0))
+            ),
+            "debug_print": bool(hm_settings.get("debug_print", hm_yaml.get("debug_print", False))),
         }
+        self.height_map_point_stride_default = hm_default["point_stride"]
+        self.height_map_max_range_default = hm_default["max_range"]
+        self.height_map_camera_update_freq_default = hm_default["camera_update_freq"]
+        self.height_map_debug_print_default = hm_default["debug_print"]
 
         # Validators
         double_validator = QDoubleValidator(0.000001, 1e6, 4)
         double_validator.setNotation(QDoubleValidator.StandardNotation)
+        target_height_validator = QDoubleValidator(-1e6, 1e6, 4)
+        target_height_validator.setNotation(QDoubleValidator.StandardNotation)
         int_validator = QIntValidator(1, 10000)
 
         # Size X
@@ -229,6 +251,31 @@ class ObservationSettingsDialog(QDialog):
         size_res_layout.addWidget(self.height_res_y_le)
 
         height_layout.addRow("Size (m):", size_res_layout)
+
+        target_layout = QHBoxLayout()
+        self.height_target_height_le = QLineEdit(str(hm_default["target_height"]))
+        self.height_target_height_le.setFixedWidth(60)
+        self.height_target_height_le.setPlaceholderText("m")
+        self.height_target_height_le.setValidator(target_height_validator)
+        target_layout.addWidget(self.height_target_height_le)
+        target_layout.addStretch(1)
+        height_layout.addRow("Target Height:", target_layout)
+
+        clipping_layout = QHBoxLayout()
+        self.height_clipping_min_le = QLineEdit(str(hm_default["clipping_min"]))
+        self.height_clipping_min_le.setFixedWidth(60)
+        self.height_clipping_min_le.setPlaceholderText("min")
+        self.height_clipping_min_le.setValidator(target_height_validator)
+        clipping_layout.addWidget(self.height_clipping_min_le)
+        clipping_layout.addWidget(QLabel("to"))
+        self.height_clipping_max_le = QLineEdit(str(hm_default["clipping_max"]))
+        self.height_clipping_max_le.setFixedWidth(60)
+        self.height_clipping_max_le.setPlaceholderText("max")
+        self.height_clipping_max_le.setValidator(target_height_validator)
+        clipping_layout.addWidget(self.height_clipping_max_le)
+        clipping_layout.addStretch(1)
+        height_layout.addRow("Clipping:", clipping_layout)
+
         height_group.setLayout(height_layout)
         self._inner_layout.addWidget(height_group)
 
@@ -342,6 +389,8 @@ class ObservationSettingsDialog(QDialog):
         # obs type
         combo = NoWheelComboBox()
         combo.addItems(self.obs_types)
+        if selected and combo.findText(selected) < 0:
+            combo.addItem(selected)
         if selected:
             combo.setCurrentText(selected)
         h.addWidget(combo)
@@ -378,6 +427,8 @@ class ObservationSettingsDialog(QDialog):
 
         combo = NoWheelComboBox()
         combo.addItems(self.obs_types)
+        if selected and combo.findText(selected) < 0:
+            combo.addItem(selected)
         if selected:
             combo.setCurrentText(selected)
         h.addWidget(combo)
@@ -436,7 +487,7 @@ class ObservationSettingsDialog(QDialog):
         """
         for rows in (self.stacked_rows, self.non_rows):
             for row in rows:
-                if row["combo"].currentText() in ("height_map", "masked_height_map"):
+                if row["combo"].currentText() in ("height_map", "masked_height_map", "camera_height_map"):
                     freq_val = to_int(row["freq"].currentText(), 50)
                     scale_val = to_float(row["scale"].currentText(), 1.0)
                     return True, freq_val, scale_val
@@ -484,10 +535,21 @@ class ObservationSettingsDialog(QDialog):
         sy = to_float(self.height_size_y_le.text(), 0.6)
         rx = to_int(self.height_res_x_le.text(), 15)
         ry = to_int(self.height_res_y_le.text(), 9)
+        target_height = to_float(self.height_target_height_le.text(), 0.5)
+        clipping_min = to_float(self.height_clipping_min_le.text(), 0.0)
+        clipping_max = to_float(self.height_clipping_max_le.text(), 0.33)
+        if clipping_min > clipping_max:
+            clipping_min, clipping_max = clipping_max, clipping_min
 
         hm_selected, hm_freq, hm_scale = self._extract_height_map_freq_scale_from_rows()
         height_map = {
-            "size_x": sx, "size_y": sy, "res_x": rx, "res_y": ry, "freq": hm_freq, "scale": hm_scale
+            "size_x": sx, "size_y": sy, "res_x": rx, "res_y": ry,
+            "freq": hm_freq, "scale": hm_scale, "target_height": target_height,
+            "clipping_min": clipping_min, "clipping_max": clipping_max,
+            "point_stride": self.height_map_point_stride_default,
+            "max_range": self.height_map_max_range_default,
+            "camera_update_freq": self.height_map_camera_update_freq_default,
+            "debug_print": self.height_map_debug_print_default,
         } if hm_selected else None
 
         # Avoid duplicate/ambiguous "height_map" entry (details live in height_map above)

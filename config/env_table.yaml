@@ -1,4 +1,4 @@
-# obs fields: ["dof_pos", "dof_vel", "ang_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "projected_gravity", "height_map", "masked_height_map", "last_action"]
+# obs fields: ["dof_pos", "dof_vel", "ang_vel", "lin_vel_x", "lin_vel_y", "lin_vel_z", "projected_gravity", "height_map", "masked_height_map", "camera_height_map", "last_action"]
 
 "wheeldog_p_v2":
   "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
@@ -186,7 +186,7 @@
 "flamingo_p_v3_1":
   "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
   "stack_size": 3
-  "non_stacked_obs_order": ["masked_height_map"]
+  "non_stacked_obs_order": ["masked_height_map", "camera_height_map"]
   "obs_scales":
     "dof_pos": 1.0
     "dof_vel": 0.05
@@ -195,6 +195,7 @@
     "lin_vel_y": 1.0
     "lin_vel_z": 0.25
     "masked_height_map": 1.0
+    "camera_height_map": 1.0
   "command":
     "command_dim": 4
     "command_3_initial": 0
@@ -210,6 +211,13 @@
     "size_y": 1.1
     "res_x": 12
     "res_y": 12
+    "target_height": 0.33
+    "clipping_min": 0.0
+    "clipping_max": 0.33
+    "point_stride": 16
+    "max_range": 2.5
+    "camera_update_freq": 10.0
+    "debug_print": false
   "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
   "hardware":
     "action_dim": 8
@@ -280,14 +288,16 @@
 "flamingo_light_p_v3":
   "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
   "stack_size": 3
-  "non_stacked_obs_order": []
+  "non_stacked_obs_order": ["masked_height_map", "camera_height_map"]
   "obs_scales":
     "dof_pos": 1.0
     "dof_vel": 0.05
     "ang_vel": 0.25
     "lin_vel_x": 2.0
     "lin_vel_y": 2.0
-    "lin_vel_z": 2.0  
+    "lin_vel_z": 2.0
+    "masked_height_map": 1.0
+    "camera_height_map": 1.0
   "action_scales": [0.25, 0.25, 40.0, 40.0]
   "command":
     "command_dim": 4
@@ -299,6 +309,18 @@
     "3": 1.0
     "4": 1.0
     "5": 1.0
+  "height_map":
+    "size_x": 1.1
+    "size_y": 1.1
+    "res_x": 12
+    "res_y": 12
+    "target_height": 0.33
+    "clipping_min": 0.0
+    "clipping_max": 0.33
+    "point_stride": 16
+    "max_range": 2.5
+    "camera_update_freq": 10.0
+    "debug_print": false
   "hardware":
     "action_dim": 4
     "Kp_shoulder": 35 
@@ -346,9 +368,9 @@
     "Kp_shoulder_roll": 30
     "Kp_knee": 200
     "Kp_shoulder_yaw": 10
-    "Kp_ankle_pitch": 40
+    "Kp_ankle_pitch": 10
     "Kp_elbow_pitch": 20
-    "Kp_ankle_roll": 40
+    "Kp_ankle_roll": 10
     "Kp_elbow_yaw": 10
     "Kd_hip_pitch": 5
     "Kd_torso": 2
@@ -387,17 +409,23 @@
     "elbow_yaw_joint_max_torque": 18
     "elbow_yaw_joint_max_vel": 50
 
-"humanoid_light_v1":
-  "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
+
+"humanoid_light_v2":
+  "stacked_obs_order": ["dof_pos", "dof_vel", "lower_ang_vel", "upper_ang_vel", "lower_projected_gravity", "upper_projected_gravity", "last_action"]
   "stack_size": 3
   "non_stacked_obs_order": []
   "obs_scales":
     "dof_pos": 1.0
     "dof_vel": 0.15
     "ang_vel": 0.25
+    "lower_ang_vel": 0.25
+    "upper_ang_vel": 0.25
     "lin_vel_x": 2.0
     "lin_vel_y": 2.0
     "lin_vel_z": 2.0
+    "projected_gravity": 1.0
+    "lower_projected_gravity": 1.0
+    "upper_projected_gravity": 1.0
   "command":
     "command_dim": 4
     "command_3_initial": 0
@@ -417,31 +445,42 @@
 
   "hardware":
     "action_dim": 26
+    "actuator_mode": "torque"
+    "coupled_enabled": true
+    "ankle_gear_ratio_1": -2.0
+    "ankle_gear_ratio_2": -2.0
+    "right_ankle_mirror": false
+    "torso_pitch_roll_gear_ratio_1": 1.0
+    "torso_pitch_roll_gear_ratio_2": 1.0
 
     "Kp_hip_pitch": 150
-    "Kp_torso": 300
+    "Kp_torso_yaw": 300
+    "Kp_torso_pitch": 100
+    "Kp_torso_roll": 100
     "Kp_hip_roll": 150
     "Kp_shoulder_pitch": 100
     "Kp_hip_yaw": 150
     "Kp_shoulder_roll": 100
     "Kp_knee": 200
     "Kp_shoulder_yaw": 50
-    "Kp_ankle_pitch": 40
-    "Kp_ankle_roll": 40
+    "Kp_ankle_pitch": 10
+    "Kp_ankle_roll": 10
     "Kp_elbow": 50
     "Kp_wrist": 50
     "Kp_head": 50
 
     "Kd_hip_pitch": 2
-    "Kd_torso": 6
+    "Kd_torso_yaw": 6
+    "Kd_torso_pitch": 2
+    "Kd_torso_roll": 2
     "Kd_hip_roll": 2
     "Kd_shoulder_pitch": 2
     "Kd_hip_yaw": 2
     "Kd_shoulder_roll": 2
     "Kd_knee": 4
     "Kd_shoulder_yaw": 2
-    "Kd_ankle_pitch": 2
-    "Kd_ankle_roll": 2
+    "Kd_ankle_pitch": 0.5
+    "Kd_ankle_roll": 0.5
     "Kd_elbow": 2
     "Kd_wrist": 2
     "Kd_head": 2
@@ -449,11 +488,11 @@
     "hip_roll_joint_max_torque": 60
     "hip_roll_joint_max_vel": 20
     "hip_pitch_joint_max_torque": 120
-    "hip_pitch_joint_max_vel": 20
+    "hip_pitch_joint_max_vel": 80
     "hip_yaw_joint_max_torque": 60
     "hip_yaw_joint_max_vel": 20
     "knee_joint_max_torque": 120
-    "knee_joint_max_vel": 20
+    "knee_joint_max_vel": 80
 
     "torso_joint_max_torque": 60
     "torso_joint_max_vel": 20
@@ -465,23 +504,23 @@
     "torso_roll_joint_max_vel": 53
 
     "ankle_roll_joint_max_torque": 14
-    "ankle_roll_joint_max_vel": 33
+    "ankle_roll_joint_max_vel": 36
     "ankle_pitch_joint_max_torque": 14
-    "ankle_pitch_joint_max_vel": 33
+    "ankle_pitch_joint_max_vel": 36
 
     "shoulder_roll_joint_max_torque": 60
     "shoulder_roll_joint_max_vel": 20
     "shoulder_pitch_joint_max_torque": 60
     "shoulder_pitch_joint_max_vel": 20
     "shoulder_yaw_joint_max_torque": 17
-    "shoulder_yaw_joint_max_vel": 43
+    "shoulder_yaw_joint_max_vel": 40
 
     "elbow_joint_max_torque": 36
     "elbow_joint_max_vel": 53
     "wrist_joint_max_torque": 14
-    "wrist_joint_max_vel": 33
+    "wrist_joint_max_vel": 36
     "head_joint_max_torque": 5.5
-    "head_joint_max_vel": 50
+    "head_joint_max_vel": 20
 
 "flamingo_p_10dof":
   "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]

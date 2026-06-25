@@ -10,13 +10,13 @@ class InitialPoseSettingsDialog(QDialog):
     def __init__(self, initial_pose_settings, parent):
         super().__init__(parent)
         self.initial_pose_settings = (initial_pose_settings or {}).copy()
-        self.setWindowTitle("Joint Offset Settings")
+        self.setWindowTitle("Initial Pose Settings")
         self._setup_ui()
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
 
-        description = QLabel("Set joint offsets. Zero means absolute joint values; non-zero values make joint state and action targets relative to the offset.")
+        description = QLabel("Set the initial base height and initial joint positions for this robot.")
         description.setWordWrap(True)
         main_layout.addWidget(description)
 
@@ -27,6 +27,10 @@ class InitialPoseSettingsDialog(QDialog):
         inner_widget = QWidget()
         form_layout = QFormLayout(inner_widget)
         self.fields = {}
+
+        self.base_z_le = QLineEdit(str(self.initial_pose_settings.get("base_z", "0.3")))
+        self.base_z_le.setValidator(QDoubleValidator())
+        form_layout.addRow(QLabel("base_z"), self.base_z_le)
 
         joints = self.initial_pose_settings.get("joints", {})
         for joint_name, value in joints.items():
@@ -48,5 +52,6 @@ class InitialPoseSettingsDialog(QDialog):
 
     def get_settings(self):
         return {
+            "base_z": self.base_z_le.text(),
             "joints": {joint_name: field.text() for joint_name, field in self.fields.items()}
         }

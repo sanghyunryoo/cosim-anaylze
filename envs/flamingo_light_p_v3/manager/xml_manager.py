@@ -122,7 +122,7 @@ class XMLManager:
         if bool(hm_cfg.get("inference_visualize", False)):
             res_x = int(hm_cfg.get("res_x", 0) or 0)
             res_y = int(hm_cfg.get("res_y", 0) or 0)
-            frame_body_name = str(hm_cfg.get("frame_body", "camera_link"))
+            frame_body_name = str(hm_cfg.get("frame_body", "F_camera_link"))
 
             worldbody = root.find('worldbody')
             target_body = None
