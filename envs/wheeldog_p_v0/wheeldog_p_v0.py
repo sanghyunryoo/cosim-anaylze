@@ -11,6 +11,7 @@ from envs.wheeldog_p_v0.utils.mujoco_utils import MuJoCoUtils
 from envs.wheeldog_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_actuator_mode
 
 
 class WheelDogPV0(MujocoEnv, utils.EzPickle):
@@ -116,6 +117,30 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
         self.initial_joint_names = list(qvel_joint_names)
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
+
+    def _update_pd_ctrl(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices]
+        dof_vel = self.data.qvel[self.qd_indices]
+        pos_hip = dof_pos[0:4]
+        pos_shoulder = dof_pos[4:8]
+        pos_leg = dof_pos[8:12] * self.gear_ratio if self.use_gear else dof_pos[8:12]
+        vel_hip = dof_vel[0:4]
+        vel_shoulder = dof_vel[4:8]
+        vel_leg = dof_vel[8:12] * self.gear_ratio * self.gamma if self.use_gear else dof_vel[8:12]
+        hip_torques = self.control_manager.pd_controller(self.kp_hip, action_scaled[0:4], pos_hip, self.kd_hip, 0.0, vel_hip)
+        shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, action_scaled[4:8], pos_shoulder, self.kd_shoulder, 0.0, vel_shoulder)
+        leg_torques = self.control_manager.pd_controller(self.kp_leg, action_scaled[8:12], pos_leg, self.kd_leg, 0.0, vel_leg)
+        leg_torques = leg_torques * np.full(4, self.gamma, dtype=np.float64) if self.use_gear else leg_torques
+        torques_list = [
+            np.clip(hip_torques, -self.config['hardware']['hip_max_torque'], self.config['hardware']['hip_max_torque']),
+            np.clip(shoulder_torques, -self.config['hardware']['shoulder_max_torque'], self.config['hardware']['shoulder_max_torque']),
+            np.clip(leg_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque']),
+        ]
+        if self.has_wheels:
+            wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, action_scaled[12:16], dof_vel[12:16])
+            torques_list.append(np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque']))
+        self.applied_torques = np.concatenate(torques_list)
+        return self.applied_torques
         
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices].copy()
@@ -192,7 +217,7 @@ class WheelDogPV0(MujocoEnv, utils.EzPickle):
             torques_list.append(wheel_torques_clipped)
         
         self.applied_torques = np.concatenate(torques_list)
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        simulate_actuator_mode(self, lambda: self._update_pd_ctrl(action_scaled), position_ctrl=action_scaled)
 
         obs = self._get_obs()
         info = self._get_info()

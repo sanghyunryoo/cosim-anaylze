@@ -452,8 +452,13 @@ class MainWindow(QMainWindow):
     def _ensure_hardware_defaults(self):
         """Ensure current env has cached hardware settings and sync self.hardware_settings."""
         env_id = self.env_id_cb.currentText()
+        defaults = self._make_hardware_defaults(env_id)
         if env_id not in self.hardware_settings_by_env:
-            self.hardware_settings_by_env[env_id] = self._make_hardware_defaults(env_id)
+            self.hardware_settings_by_env[env_id] = defaults
+        else:
+            merged = defaults.copy()
+            merged.update(self.hardware_settings_by_env[env_id])
+            self.hardware_settings_by_env[env_id] = merged
         self.hardware_settings = (self.hardware_settings_by_env[env_id]).copy()
 
     @staticmethod
@@ -1799,11 +1804,13 @@ class MainWindow(QMainWindow):
             self.actuator_settings = self._make_actuator_defaults(new_env_id)
             self.actuator_settings_by_env[new_env_id] = (self.actuator_settings).copy()
 
+        hardware_defaults = self._make_hardware_defaults(new_env_id)
         if new_env_id in self.hardware_settings_by_env:
-            self.hardware_settings = (self.hardware_settings_by_env[new_env_id]).copy()
+            self.hardware_settings = hardware_defaults.copy()
+            self.hardware_settings.update(self.hardware_settings_by_env[new_env_id])
         else:
-            self.hardware_settings = self._make_hardware_defaults(new_env_id)
-            self.hardware_settings_by_env[new_env_id] = (self.hardware_settings).copy()
+            self.hardware_settings = hardware_defaults
+        self.hardware_settings_by_env[new_env_id] = (self.hardware_settings).copy()
 
         if new_env_id in self.initial_pose_settings_by_env:
             self.initial_pose_settings = {

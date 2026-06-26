@@ -14,6 +14,7 @@ from envs.humanoid_light_v2.utils.noise_generator_utils import (
 )
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_dynamic_ctrl
 
 
 def _config_bool(value, default=False):
@@ -58,21 +59,21 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         hw = config["hardware"]
 
         # New recommended keys
-        self.kp_hip_pitch = hw.get("Kp_hip_pitch", 200)
-        self.kp_hip_roll = hw.get("Kp_hip_roll", 150)
-        self.kp_hip_yaw = hw.get("Kp_hip_yaw", 150)
-        self.kp_knee = hw.get("Kp_knee", 200)
-        self.kp_ankle_pitch = hw.get("Kp_ankle_pitch", 40)
-        self.kp_ankle_roll = hw.get("Kp_ankle_roll", 40)
+        self.kp_hip_pitch = hw.get("Kp_hip_pitch", 100)
+        self.kp_hip_roll = hw.get("Kp_hip_roll", 100)
+        self.kp_hip_yaw = hw.get("Kp_hip_yaw", 100)
+        self.kp_knee = hw.get("Kp_knee", 100)
+        self.kp_ankle_pitch = hw.get("Kp_ankle_pitch", 20)
+        self.kp_ankle_roll = hw.get("Kp_ankle_roll", 20)
 
-        self.kp_torso_yaw = hw.get("Kp_torso_yaw", hw.get("Kp_torso", 300))
-        self.kp_torso_pitch = hw.get("Kp_torso_pitch", hw.get("Kp_torso", 300))
-        self.kp_torso_roll = hw.get("Kp_torso_roll", hw.get("Kp_torso", 300))
-        self.kp_head = hw.get("Kp_head", 50)
+        self.kp_torso_yaw = hw.get("Kp_torso_yaw", hw.get("Kp_torso", 100))
+        self.kp_torso_pitch = hw.get("Kp_torso_pitch", hw.get("Kp_torso", 100))
+        self.kp_torso_roll = hw.get("Kp_torso_roll", hw.get("Kp_torso", 100))
+        self.kp_head = hw.get("Kp_head", 100)
 
         self.kp_shoulder_pitch = hw.get("Kp_shoulder_pitch", 100)
         self.kp_shoulder_roll = hw.get("Kp_shoulder_roll", 100)
-        self.kp_shoulder_yaw = hw.get("Kp_shoulder_yaw", 50)
+        self.kp_shoulder_yaw = hw.get("Kp_shoulder_yaw", 25)
 
         # Elbow/wrist: new keys
         self.kp_elbow = hw.get("Kp_elbow", None)
@@ -85,29 +86,29 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         if self.kp_wrist is None:
             self.kp_wrist = hw.get("Kp_wrist", 50)
 
-        self.kd_hip_pitch = hw.get("Kd_hip_pitch", 2)
-        self.kd_hip_roll = hw.get("Kd_hip_roll", 2)
-        self.kd_hip_yaw = hw.get("Kd_hip_yaw", 2)
-        self.kd_knee = hw.get("Kd_knee", 4)
-        self.kd_ankle_pitch = hw.get("Kd_ankle_pitch", 2)
-        self.kd_ankle_roll = hw.get("Kd_ankle_roll", 2)
+        self.kd_hip_pitch = hw.get("Kd_hip_pitch", 1.0)
+        self.kd_hip_roll = hw.get("Kd_hip_roll", 1.0)
+        self.kd_hip_yaw = hw.get("Kd_hip_yaw", 1.0)
+        self.kd_knee = hw.get("Kd_knee", 1.0)
+        self.kd_ankle_pitch = hw.get("Kd_ankle_pitch", 0.25)
+        self.kd_ankle_roll = hw.get("Kd_ankle_roll", 0.25)
 
-        self.kd_torso_yaw = hw.get("Kd_torso_yaw", hw.get("Kd_torso", 6))
-        self.kd_torso_pitch = hw.get("Kd_torso_pitch", hw.get("Kd_torso", 6))
-        self.kd_torso_roll = hw.get("Kd_torso_roll", hw.get("Kd_torso", 6))
-        self.kd_head = hw.get("Kd_head", 2)
+        self.kd_torso_yaw = hw.get("Kd_torso_yaw", hw.get("Kd_torso", 1.0))
+        self.kd_torso_pitch = hw.get("Kd_torso_pitch", hw.get("Kd_torso", 1.0))
+        self.kd_torso_roll = hw.get("Kd_torso_roll", hw.get("Kd_torso", 1.0))
+        self.kd_head = hw.get("Kd_head", 1.0)
 
-        self.kd_shoulder_pitch = hw.get("Kd_shoulder_pitch", 2)
-        self.kd_shoulder_roll = hw.get("Kd_shoulder_roll", 2)
-        self.kd_shoulder_yaw = hw.get("Kd_shoulder_yaw", 2)
+        self.kd_shoulder_pitch = hw.get("Kd_shoulder_pitch", 1.0)
+        self.kd_shoulder_roll = hw.get("Kd_shoulder_roll", 1.0)
+        self.kd_shoulder_yaw = hw.get("Kd_shoulder_yaw", 1.0)
 
         self.kd_elbow = hw.get("Kd_elbow", None)
         self.kd_wrist = hw.get("Kd_wrist", None)
 
         if self.kd_elbow is None:
-            self.kd_elbow = hw.get("Kd_elbow_pitch", hw.get("Kd_elbow_yaw", 2))
+            self.kd_elbow = hw.get("Kd_elbow_pitch", hw.get("Kd_elbow_yaw", 1.0))
         if self.kd_wrist is None:
-            self.kd_wrist = hw.get("Kd_wrist", 2)
+            self.kd_wrist = hw.get("Kd_wrist", 1.0)
 
         # --- Torque limits (support both new + legacy) ---
         # Legs
@@ -623,8 +624,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         if self.coupled_control_enabled:
             dof_pos = self._joint_to_motor(dof_pos)
             dof_vel = self._joint_to_motor(dof_vel)
-        kd = np.zeros_like(self.kd_by_joint) if not self.uses_position_actuators else self.kd_by_joint
-        motor_torques = self.kp_by_joint * (action_scaled - dof_pos) - kd * dof_vel
+        motor_torques = self.kp_by_joint * (action_scaled - dof_pos) - self.kd_by_joint * dof_vel
         joint_torques = self._motor_to_joint_torque(motor_torques) if self.coupled_control_enabled else motor_torques
         self.computed_torques = joint_torques.astype(np.float64)
         self.applied_torques = np.clip(
@@ -644,10 +644,15 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
         position_targets = self._motor_to_joint_position(action_scaled) if self.coupled_control_enabled else action_scaled
         if self.uses_hybrid_actuators:
-            ctrl = position_targets[self.ctrl_from_policy_order].copy()
-            motor_torques = self._update_pd_torques(action_scaled)
-            ctrl[self.motor_actuator_mask_ctrl] = motor_torques[self.motor_actuator_mask_ctrl]
-            self.do_simulation(ctrl, self.frame_skip)
+            position_ctrl = position_targets[self.ctrl_from_policy_order].copy()
+
+            def ctrl_fn():
+                ctrl = position_ctrl.copy()
+                motor_torques = self._update_pd_torques(action_scaled)
+                ctrl[self.motor_actuator_mask_ctrl] = motor_torques[self.motor_actuator_mask_ctrl]
+                return ctrl
+
+            simulate_dynamic_ctrl(self, ctrl_fn)
             actuator_force = self.data.actuator_force.astype(np.float64)
             self.ctrl_torques = actuator_force.copy()
             self.applied_torques = actuator_force[self.policy_from_ctrl_order].copy()
@@ -657,7 +662,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             self.ctrl_torques = actuator_force.copy()
             self.applied_torques = actuator_force[self.policy_from_ctrl_order].copy()
         else:
-            self.do_simulation(self._update_pd_torques(action_scaled), self.frame_skip)
+            simulate_dynamic_ctrl(self, lambda: self._update_pd_torques(action_scaled))
 
         obs = self._get_obs()
         info = self._get_info()

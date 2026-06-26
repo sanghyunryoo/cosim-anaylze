@@ -11,6 +11,7 @@ from envs.bon_p_v1.utils.mujoco_utils import MuJoCoUtils
 from envs.bon_p_v1.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_actuator_mode
 
 
 class BonPV1(MujocoEnv, utils.EzPickle):
@@ -171,6 +172,32 @@ class BonPV1(MujocoEnv, utils.EzPickle):
 
     def _absolute_action_setpoints(self, action):
         return self._scaled_relative_action(action) + self.action_offsets
+
+    def _update_pd_ctrl(self, action_scaled):
+        dof_pos = self._relative_joint_pos()
+        dof_vel = self._relative_joint_vel()
+        f_hip_torques = self.control_manager.pd_controller(self.kp_hip, action_scaled[0:2], dof_pos[0:2], self.kd_hip, 0.0, dof_vel[0:2])
+        f_shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, action_scaled[2:4], dof_pos[2:4], self.kd_shoulder, 0.0, dof_vel[2:4])
+        f_leg_torques = self.control_manager.pd_controller(self.kp_leg, action_scaled[4:6], dof_pos[4:6], self.kd_leg, 0.0, dof_vel[4:6])
+        f_leg_torques = f_leg_torques * np.full(2, self.gamma, dtype=np.float64) if self.use_gear else f_leg_torques
+        f_wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, action_scaled[6:8], dof_vel[6:8])
+        r_hip_torques = self.control_manager.pd_controller(self.kp_hip, action_scaled[8:10], dof_pos[6:8], self.kd_hip, 0.0, dof_vel[8:10])
+        r_shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, action_scaled[10:12], dof_pos[8:10], self.kd_shoulder, 0.0, dof_vel[10:12])
+        r_leg_torques = self.control_manager.pd_controller(self.kp_leg, action_scaled[12:14], dof_pos[10:12], self.kd_leg, 0.0, dof_vel[12:14])
+        r_leg_torques = r_leg_torques * np.full(2, self.gamma, dtype=np.float64) if self.use_gear else r_leg_torques
+        r_wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, action_scaled[14:16], dof_vel[14:16])
+
+        self.applied_torques = np.concatenate([
+            np.clip(f_hip_torques, -self.config['hardware']['hip_max_torque'], self.config['hardware']['hip_max_torque']),
+            np.clip(f_shoulder_torques, -self.config['hardware']['shoulder_max_torque'], self.config['hardware']['shoulder_max_torque']),
+            np.clip(f_leg_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque']),
+            np.clip(f_wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque']),
+            np.clip(r_hip_torques, -self.config['hardware']['hip_max_torque'], self.config['hardware']['hip_max_torque']),
+            np.clip(r_shoulder_torques, -self.config['hardware']['shoulder_max_torque'], self.config['hardware']['shoulder_max_torque']),
+            np.clip(r_leg_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque']),
+            np.clip(r_wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque']),
+        ])
+        return self.applied_torques
         
     def _get_obs(self):
         dof_pos = self._relative_joint_pos()
@@ -260,7 +287,11 @@ class BonPV1(MujocoEnv, utils.EzPickle):
         torques_list = [f_hip_torques_clipped, f_shoulder_torques_clipped, f_leg_torques_clipped, f_wheel_torques_clipped, r_hip_torques_clipped, r_shoulder_torques_clipped, r_leg_torques_clipped, r_wheel_torques_clipped]
         
         self.applied_torques = np.concatenate(torques_list)
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        simulate_actuator_mode(
+            self,
+            lambda: self._update_pd_ctrl(action_scaled),
+            position_ctrl=self._absolute_action_setpoints(self.filtered_action),
+        )
 
         obs = self._get_obs()
         info = self._get_info()

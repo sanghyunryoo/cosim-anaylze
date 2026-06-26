@@ -2,6 +2,7 @@ import os
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from envs.actuator_mode_utils import configure_actuator_xml
 
 
 class XMLManager:
@@ -147,6 +148,7 @@ class XMLManager:
                     })
                     target_body.append(site_element)
 
+        configure_actuator_xml(root, self.config)
         randomized_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'applied_wheeldog_p_v0.xml')
         tree.write(randomized_model_path)
         return randomized_model_path

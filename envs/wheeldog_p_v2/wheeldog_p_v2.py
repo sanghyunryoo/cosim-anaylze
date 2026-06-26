@@ -14,6 +14,7 @@ from envs.wheeldog_p_v2.utils.noise_generator_utils import (
 )
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_actuator_mode
 from envs.masked_height_map import masked_height_map, parse_camera_fovs_from_xml
 
 
@@ -231,6 +232,21 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
 
         return tau
 
+    def _update_pd_ctrl(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices].copy()
+        dof_vel = self.data.qvel[self.qd_indices].copy()
+        q_full = self._build_full_qpos_vector(dof_pos)
+        d_full = dof_vel.copy()
+        if self.use_gear:
+            leg_pos_idx = [4, 5, 12, 13]
+            leg_vel_idx = [4, 5, 12, 13]
+            q_full[leg_pos_idx] = q_full[leg_pos_idx] * self.gear_ratio
+            d_full[leg_vel_idx] = d_full[leg_vel_idx] * self.gear_ratio
+        kp_vec, kd_vec, td_vec = self._build_control_vectors(action_scaled)
+        tau = self.control_manager.compute_torque(kp=kp_vec, tq=action_scaled, q=q_full, kd=kd_vec, td=td_vec, d=d_full)
+        self.applied_torques = self._clip_group_torques(tau)
+        return self.applied_torques
+
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices].copy()
         leg_pos = [4, 5, 10, 11]
@@ -370,7 +386,7 @@ class WheelDogPV2(MujocoEnv, utils.EzPickle):
         )
 
         self.applied_torques = self._clip_group_torques(tau)
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        simulate_actuator_mode(self, lambda: self._update_pd_ctrl(action_scaled), position_ctrl=action_scaled)
 
         obs = self._get_obs()
         info = self._get_info()

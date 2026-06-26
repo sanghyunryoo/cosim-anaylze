@@ -424,7 +424,7 @@ class XMLManager:
                 joint.attrib["frictionloss"] = str(self.config["random"]["friction_loss"])
             else:
                 _, kd = self._pd_gains_for_joint(joint_name)
-            joint.attrib["damping"] = str(kd)
+            joint.attrib["damping"] = str(kd if actuator_mode == "position" else 0.0)
             joint_ranges[joint_name] = joint.attrib.get("range", "-3.14 3.14")
 
         actuator = root.find("actuator")

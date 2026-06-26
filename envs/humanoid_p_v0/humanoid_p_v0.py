@@ -11,6 +11,7 @@ from envs.humanoid_p_v0.utils.mujoco_utils import MuJoCoUtils
 from envs.humanoid_p_v0.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import position_actuator_mask, simulate_dynamic_ctrl
 
 
 class HumanoidPV0(MujocoEnv, utils.EzPickle):
@@ -20,6 +21,8 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         self.id = "humanoid_p_v0"
         self.config = config
         self.action_dim = int(config["hardware"]["action_dim"])
+        if self.action_dim != 23:
+            self.action_dim = 23
         default_action_scales = np.ones(self.action_dim, dtype=np.float64)
         cfg_action_scales = config.get("action_scales", default_action_scales)
         if not isinstance(cfg_action_scales, (list, tuple, np.ndarray)) or len(cfg_action_scales) != self.action_dim:
@@ -133,6 +136,43 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
 
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(self.joint_names_in_order)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(self.joint_names_in_order)
+        self.uses_position_actuators = bool(np.any(position_actuator_mask(self.model)))
+
+    def _update_pd_torques(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices]
+        dof_vel = self.data.qvel[self.qd_indices]
+
+        torques = np.concatenate([
+            self.control_manager.pd_controller(self.kp_hip_pitch, action_scaled[0:2], dof_pos[0:2], self.kd_hip_pitch, 0.0, dof_vel[0:2]),
+            self.control_manager.pd_controller(self.kp_torso, action_scaled[2:3], dof_pos[2:3], self.kd_torso, 0.0, dof_vel[2:3]),
+            self.control_manager.pd_controller(self.kp_hip_roll, action_scaled[3:5], dof_pos[3:5], self.kd_hip_roll, 0.0, dof_vel[3:5]),
+            self.control_manager.pd_controller(self.kp_shoulder_pitch, action_scaled[5:7], dof_pos[5:7], self.kd_shoulder_pitch, 0.0, dof_vel[5:7]),
+            self.control_manager.pd_controller(self.kp_hip_yaw, action_scaled[7:9], dof_pos[7:9], self.kd_hip_yaw, 0.0, dof_vel[7:9]),
+            self.control_manager.pd_controller(self.kp_shoulder_roll, action_scaled[9:11], dof_pos[9:11], self.kd_shoulder_roll, 0.0, dof_vel[9:11]),
+            self.control_manager.pd_controller(self.kp_knee, action_scaled[11:13], dof_pos[11:13], self.kd_knee, 0.0, dof_vel[11:13]),
+            self.control_manager.pd_controller(self.kp_shoulder_yaw, action_scaled[13:15], dof_pos[13:15], self.kd_shoulder_yaw, 0.0, dof_vel[13:15]),
+            self.control_manager.pd_controller(self.kp_ankle_pitch, action_scaled[15:17], dof_pos[15:17], self.kd_ankle_pitch, 0.0, dof_vel[15:17]),
+            self.control_manager.pd_controller(self.kp_elbow_pitch, action_scaled[17:19], dof_pos[17:19], self.kd_elbow_pitch, 0.0, dof_vel[17:19]),
+            self.control_manager.pd_controller(self.kp_ankle_roll, action_scaled[19:21], dof_pos[19:21], self.kd_ankle_roll, 0.0, dof_vel[19:21]),
+            self.control_manager.pd_controller(self.kp_elbow_yaw, action_scaled[21:23], dof_pos[21:23], self.kd_elbow_yaw, 0.0, dof_vel[21:23]),
+        ])
+
+        limits = np.array([
+            self.config['hardware']['hip_pitch_joint_max_torque'], self.config['hardware']['hip_pitch_joint_max_torque'],
+            self.config['hardware']['torso_joint_max_torque'],
+            self.config['hardware']['hip_roll_joint_max_torque'], self.config['hardware']['hip_roll_joint_max_torque'],
+            self.config['hardware']['shoulder_pitch_joint_max_torque'], self.config['hardware']['shoulder_pitch_joint_max_torque'],
+            self.config['hardware']['hip_yaw_joint_max_torque'], self.config['hardware']['hip_yaw_joint_max_torque'],
+            self.config['hardware']['shoulder_roll_joint_max_torque'], self.config['hardware']['shoulder_roll_joint_max_torque'],
+            self.config['hardware']['knee_joint_max_torque'], self.config['hardware']['knee_joint_max_torque'],
+            self.config['hardware']['shoulder_yaw_joint_max_torque'], self.config['hardware']['shoulder_yaw_joint_max_torque'],
+            self.config['hardware']['ankle_pitch_joint_max_torque'], self.config['hardware']['ankle_pitch_joint_max_torque'],
+            self.config['hardware']['elbow_pitch_joint_max_torque'], self.config['hardware']['elbow_pitch_joint_max_torque'],
+            self.config['hardware']['ankle_roll_joint_max_torque'], self.config['hardware']['ankle_roll_joint_max_torque'],
+            self.config['hardware']['elbow_yaw_joint_max_torque'], self.config['hardware']['elbow_yaw_joint_max_torque'],
+        ], dtype=np.float64)
+        self.applied_torques = np.clip(torques, -limits, limits)
+        return self.applied_torques
 
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices]
@@ -171,70 +211,12 @@ class HumanoidPV0(MujocoEnv, utils.EzPickle):
         self.action = action
         self.filtered_action = self.control_manager.delay_filter(action)
 
-        # Pull the current joint positions and velocities
-        dof_pos = self.data.qpos[self.q_indices]
-        dof_vel = self.data.qvel[self.qd_indices]
-
-        # Extract joint positions and velocities from observation (order from Isaac Lab)
-        pos_hip_pitch, vel_hip_pitch = dof_pos[0:2], dof_vel[0:2]
-        pos_torso, vel_torso = dof_pos[2:3], dof_vel[2:3]
-        pos_hip_roll, vel_hip_roll = dof_pos[3:5], dof_vel[3:5]
-        pos_shoulder_pitch, vel_shoulder_pitch = dof_pos[5:7], dof_vel[5:7]
-        pos_hip_yaw, vel_hip_yaw = dof_pos[7:9], dof_vel[7:9]
-        pos_shoulder_roll, vel_shoulder_roll = dof_pos[9:11], dof_vel[9:11]
-        pos_knee, vel_knee = dof_pos[11:13], dof_vel[11:13]
-        pos_shoulder_yaw, vel_shoulder_yaw = dof_pos[13:15], dof_vel[13:15]
-        pos_ankle_pitch, vel_ankle_pitch = dof_pos[15:17], dof_vel[15:17]
-        pos_elbow_pitch, vel_elbow_pitch = dof_pos[17:19], dof_vel[17:19]
-        pos_ankle_roll, vel_ankle_roll = dof_pos[19:21], dof_vel[19:21]
-        pos_elbow_yaw, vel_elbow_yaw = dof_pos[21:23], dof_vel[21:23]
-
-        # Get the scaled action
         action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
-        hip_pitch_action_scaled = action_scaled[0:2]
-        torso_action_scaled = action_scaled[2:3]
-        hip_roll_action_scaled = action_scaled[3:5]
-        shoulder_pitch_action_scaled = action_scaled[5:7]
-        hip_yaw_action_scaled = action_scaled[7:9]
-        shoulder_roll_action_scaled = action_scaled[9:11]
-        knee_action_scaled = action_scaled[11:13]
-        shoulder_yaw_action_scaled = action_scaled[13:15]
-        ankle_pitch_action_scaled = action_scaled[15:17]
-        elbow_pitch_action_scaled = action_scaled[17:19]
-        ankle_roll_action_scaled = action_scaled[19:21]
-        elbow_yaw_action_scaled = action_scaled[21:23]
-
-        hip_pitch_torques = self.control_manager.pd_controller(self.kp_hip_pitch, hip_pitch_action_scaled, pos_hip_pitch, self.kd_hip_pitch, 0.0, vel_hip_pitch)
-        torso_torques = self.control_manager.pd_controller(self.kp_torso, torso_action_scaled, pos_torso, self.kd_torso, 0.0, vel_torso)
-        hip_roll_torques = self.control_manager.pd_controller(self.kp_hip_roll, hip_roll_action_scaled, pos_hip_roll, self.kd_hip_roll, 0.0, vel_hip_roll)
-        shoulder_pitch_torques = self.control_manager.pd_controller(self.kp_shoulder_pitch, shoulder_pitch_action_scaled, pos_shoulder_pitch, self.kd_shoulder_pitch, 0.0, vel_shoulder_pitch)
-        hip_yaw_torques = self.control_manager.pd_controller(self.kp_hip_yaw, hip_yaw_action_scaled, pos_hip_yaw, self.kd_hip_yaw, 0.0, vel_hip_yaw)
-        shoulder_roll_torques = self.control_manager.pd_controller(self.kp_shoulder_roll, shoulder_roll_action_scaled, pos_shoulder_roll, self.kd_shoulder_roll, 0.0, vel_shoulder_roll)
-        knee_torques = self.control_manager.pd_controller(self.kp_knee, knee_action_scaled, pos_knee, self.kd_knee, 0.0, vel_knee)
-        shoulder_yaw_torques = self.control_manager.pd_controller(self.kp_shoulder_yaw, shoulder_yaw_action_scaled, pos_shoulder_yaw, self.kd_shoulder_yaw, 0.0, vel_shoulder_yaw)
-        ankle_pitch_torques = self.control_manager.pd_controller(self.kp_ankle_pitch, ankle_pitch_action_scaled, pos_ankle_pitch, self.kd_ankle_pitch, 0.0, vel_ankle_pitch)
-        elbow_pitch_torques = self.control_manager.pd_controller(self.kp_elbow_pitch, elbow_pitch_action_scaled, pos_elbow_pitch, self.kd_elbow_pitch, 0.0, vel_elbow_pitch)
-        ankle_roll_torques = self.control_manager.pd_controller(self.kp_ankle_roll, ankle_roll_action_scaled, pos_ankle_roll, self.kd_ankle_roll, 0.0, vel_ankle_roll)
-        elbow_yaw_torques = self.control_manager.pd_controller(self.kp_elbow_yaw, elbow_yaw_action_scaled, pos_elbow_yaw, self.kd_elbow_yaw, 0.0, vel_elbow_yaw)
-
-        hip_pitch_torques_clipped = np.clip(hip_pitch_torques, -self.config['hardware']['hip_pitch_joint_max_torque'], self.config['hardware']['hip_pitch_joint_max_torque'])
-        torso_torques_clipped = np.clip(torso_torques, -self.config['hardware']['torso_joint_max_torque'], self.config['hardware']['torso_joint_max_torque'])
-        hip_roll_torques_clipped = np.clip(hip_roll_torques, -self.config['hardware']['hip_roll_joint_max_torque'], self.config['hardware']['hip_roll_joint_max_torque'])
-        shoulder_pitch_torques_clipped = np.clip(shoulder_pitch_torques, -self.config['hardware']['shoulder_pitch_joint_max_torque'], self.config['hardware']['shoulder_pitch_joint_max_torque'])
-        hip_yaw_torques_clipped = np.clip(hip_yaw_torques, -self.config['hardware']['hip_yaw_joint_max_torque'], self.config['hardware']['hip_yaw_joint_max_torque'])
-        shoulder_roll_torques_clipped = np.clip(shoulder_roll_torques, -self.config['hardware']['shoulder_roll_joint_max_torque'], self.config['hardware']['shoulder_roll_joint_max_torque'])
-        knee_torques_clipped = np.clip(knee_torques, -self.config['hardware']['knee_joint_max_torque'], self.config['hardware']['knee_joint_max_torque'])
-        shoulder_yaw_torques_clipped = np.clip(shoulder_yaw_torques, -self.config['hardware']['shoulder_yaw_joint_max_torque'], self.config['hardware']['shoulder_yaw_joint_max_torque'])
-        ankle_pitch_torques_clipped = np.clip(ankle_pitch_torques, -self.config['hardware']['ankle_pitch_joint_max_torque'], self.config['hardware']['ankle_pitch_joint_max_torque'])
-        elbow_pitch_torques_clipped = np.clip(elbow_pitch_torques, -self.config['hardware']['elbow_pitch_joint_max_torque'], self.config['hardware']['elbow_pitch_joint_max_torque'])
-        ankle_roll_torques_clipped = np.clip(ankle_roll_torques, -self.config['hardware']['ankle_roll_joint_max_torque'], self.config['hardware']['ankle_roll_joint_max_torque'])
-        elbow_yaw_torques_clipped = np.clip(elbow_yaw_torques, -self.config['hardware']['elbow_yaw_joint_max_torque'], self.config['hardware']['elbow_yaw_joint_max_torque'])
-
-        self.applied_torques = np.concatenate([hip_pitch_torques_clipped, torso_torques_clipped, hip_roll_torques_clipped, shoulder_pitch_torques_clipped,
-        hip_yaw_torques_clipped, shoulder_roll_torques_clipped,  knee_torques_clipped, shoulder_yaw_torques_clipped, ankle_pitch_torques_clipped,
-        elbow_pitch_torques_clipped, ankle_roll_torques_clipped, elbow_yaw_torques_clipped])
-        
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        if self.uses_position_actuators:
+            self.do_simulation(action_scaled, self.frame_skip)
+            self.applied_torques = self.data.actuator_force.astype(np.float64).copy()
+        else:
+            simulate_dynamic_ctrl(self, lambda: self._update_pd_torques(action_scaled))
 
         obs = self._get_obs()
         info = self._get_info()

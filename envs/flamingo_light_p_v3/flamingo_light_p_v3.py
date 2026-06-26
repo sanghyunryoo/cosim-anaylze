@@ -11,6 +11,7 @@ from envs.flamingo_light_p_v3.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_light_p_v3.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_actuator_mode
 from envs.camera_height_map import build_camera_height_map
 from envs.masked_height_map import masked_height_map, parse_camera_fovs_from_xml
 
@@ -149,6 +150,16 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
 
+    def _update_pd_ctrl(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices]
+        dof_vel = self.data.qvel[self.qd_indices]
+        shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, action_scaled[0:2], dof_pos[0:2], self.kd_shoulder, 0.0, dof_vel[0:2])
+        wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, action_scaled[2:4], dof_vel[2:4])
+        shoulder_torques_clipped = np.clip(shoulder_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque'])
+        wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
+        self.applied_torques = np.concatenate([shoulder_torques_clipped, wheel_torques_clipped])
+        return self.applied_torques
+
     def _debug_print_height_maps(self, height_map, masked_height_map, fov_valid_mask=None):
         if not self.height_map_debug_print:
             return
@@ -276,8 +287,7 @@ class FlamingoLightPV3(MujocoEnv, utils.EzPickle):
         wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
 
         self.applied_torques = np.concatenate([shoulder_torques_clipped, wheel_torques_clipped])
-
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        simulate_actuator_mode(self, lambda: self._update_pd_ctrl(action_scaled), position_ctrl=action_scaled)
 
         obs = self._get_obs()
         info = self._get_info()

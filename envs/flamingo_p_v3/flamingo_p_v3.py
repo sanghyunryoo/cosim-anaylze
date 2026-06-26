@@ -11,6 +11,7 @@ from envs.flamingo_p_v3.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_p_v3.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_actuator_mode
 
 
 class FlamingoPV3(MujocoEnv, utils.EzPickle):
@@ -125,6 +126,32 @@ class FlamingoPV3(MujocoEnv, utils.EzPickle):
         self.q_indices = self.mujoco_utils.get_qpos_joint_indices_by_name(qpos_joint_names)
         self.qd_indices = self.mujoco_utils.get_qvel_joint_indices_by_name(qvel_joint_names)
 
+    def _update_pd_ctrl(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices]
+        dof_vel = self.data.qvel[self.qd_indices]
+        pos_hip = dof_pos[0:2]
+        pos_shoulder = dof_pos[2:4]
+        pos_leg = dof_pos[4:6] * self.gear_ratio if self.use_gear else dof_pos[4:6]
+        vel_hip = dof_vel[0:2]
+        vel_shoulder = dof_vel[2:4]
+        vel_leg = dof_vel[4:6] * self.gear_ratio if self.use_gear else dof_vel[4:6]
+
+        hip_torques = self.control_manager.pd_controller(self.kp_hip, action_scaled[0:2], pos_hip, self.kd_hip, 0.0, vel_hip)
+        shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, action_scaled[2:4], pos_shoulder, self.kd_shoulder, 0.0, vel_shoulder)
+        leg_torques = self.control_manager.pd_controller(self.kp_leg, action_scaled[4:6], pos_leg, self.kd_leg, 0.0, vel_leg)
+        leg_torques = leg_torques * np.array([self.gamma, self.gamma], dtype=np.float64) if self.use_gear else leg_torques
+
+        torques_list = [
+            np.clip(hip_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque']),
+            np.clip(shoulder_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque']),
+            np.clip(leg_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque']),
+        ]
+        if self.has_wheels:
+            wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, action_scaled[6:8], dof_vel[6:8])
+            torques_list.append(np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque']))
+        self.applied_torques = np.concatenate(torques_list)
+        return self.applied_torques
+
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices].copy()
         dof_pos[4:6] = dof_pos[4:6] * self.gear_ratio if self.use_gear else dof_pos[4:6]  # Joint space -> Motor space
@@ -166,51 +193,8 @@ class FlamingoPV3(MujocoEnv, utils.EzPickle):
         self.action = action
         self.filtered_action = self.control_manager.delay_filter(action)
 
-        # Current joint states
-        dof_pos = self.data.qpos[self.q_indices]
-        dof_vel = self.data.qvel[self.qd_indices]
-
-        # Leg joints (always present)
-        pos_hip = dof_pos[0:2]
-        pos_shoulder = dof_pos[2:4]
-        pos_leg = dof_pos[4:6] * self.gear_ratio if self.use_gear else dof_pos[4:6]
-
-         # Wheel joints (if present)
-        vel_hip = dof_vel[0:2]
-        vel_shoulder = dof_vel[2:4]
-        vel_leg = dof_vel[4:6] * self.gear_ratio if self.use_gear else dof_vel[4:6]
-
-        # Scale actions
         action_scaled = scale_and_clip_action(self.filtered_action, self.action_scaler, self.action_clip_min, self.action_clip_max)
-        hip_action_scaled = action_scaled[0:2]
-        shoulder_action_scaled = action_scaled[2:4]
-        leg_action_scaled = action_scaled[4:6]
-
-        # PD control for legs
-        hip_torques = self.control_manager.pd_controller(self.kp_hip, hip_action_scaled, pos_hip, self.kd_hip, 0.0, vel_hip)
-        shoulder_torques = self.control_manager.pd_controller(self.kp_shoulder, shoulder_action_scaled, pos_shoulder, self.kd_shoulder, 0.0, vel_shoulder)
-        leg_torques = self.control_manager.pd_controller(self.kp_leg, leg_action_scaled, pos_leg, self.kd_leg, 0.0, vel_leg)
-        leg_torques = leg_torques * np.array([self.gamma, self.gamma], dtype=np.float64) if self.use_gear else leg_torques
-
-        # Clip leg torques
-        hip_torques_clipped = np.clip(hip_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque'])
-        shoulder_torques_clipped = np.clip(shoulder_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque'])
-        leg_torques_clipped = np.clip(leg_torques, -self.config['hardware']['leg_max_torque'], self.config['hardware']['leg_max_torque'])
-
-        torques_list = [hip_torques_clipped, shoulder_torques_clipped, leg_torques_clipped]
-
-        # If wheels exist, add wheel control (pure D + FF)
-        if self.has_wheels:
-            vel_wheel = dof_vel[6:8]
-            wheel_action_scaled = action_scaled[6:8]
-            wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, wheel_action_scaled, vel_wheel)
-            wheel_torques_clipped = np.clip(wheel_torques, -self.config['hardware']['wheel_max_torque'], self.config['hardware']['wheel_max_torque'])
-            torques_list.append(wheel_torques_clipped)
-
-        self.applied_torques = np.concatenate(torques_list)
-
-
-        self.do_simulation(self.applied_torques, self.frame_skip)
+        simulate_actuator_mode(self, lambda: self._update_pd_ctrl(action_scaled), position_ctrl=action_scaled)
 
         obs = self._get_obs()
         info = self._get_info()

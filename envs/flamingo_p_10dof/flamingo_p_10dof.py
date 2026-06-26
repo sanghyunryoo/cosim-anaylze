@@ -11,6 +11,7 @@ from envs.flamingo_p_10dof.utils.mujoco_utils import MuJoCoUtils
 from envs.flamingo_p_10dof.utils.noise_generator_utils import truncated_gaussian_noisy_data
 from envs.initial_pose import build_initial_qpos
 from envs.action_utils import normalize_action_clippings, scale_and_clip_action
+from envs.actuator_mode_utils import simulate_actuator_mode
 
 
 class FlamingoP10dof(MujocoEnv, utils.EzPickle):
@@ -162,6 +163,21 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
             ordered.append(values[self._joint_order_index[joint_name]])
         return np.asarray(ordered, dtype=np.float64)
 
+    def _update_pd_ctrl(self, action_scaled):
+        dof_pos = self.data.qpos[self.q_indices]
+        dof_vel = self.data.qvel[self.qd_indices]
+        hip_pitch_torques = self.control_manager.pd_controller(self.kp_hip_pitch, action_scaled[0:2], dof_pos[0:2], self.kd_hip_pitch, 0.0, dof_vel[0:2])
+        hip_roll_torques = self.control_manager.pd_controller(self.kp_hip_roll, action_scaled[2:4], dof_pos[2:4], self.kd_hip_roll, 0.0, dof_vel[2:4])
+        hip_yaw_torques = self.control_manager.pd_controller(self.kp_hip_yaw, action_scaled[4:6], dof_pos[4:6], self.kd_hip_yaw, 0.0, dof_vel[4:6])
+        leg_torques = self.control_manager.pd_controller(self.kp_leg, action_scaled[6:8], dof_pos[6:8], self.kd_leg, 0.0, dof_vel[6:8])
+        leg_torques_all = np.concatenate([hip_pitch_torques, hip_roll_torques, hip_yaw_torques, leg_torques])
+        torques_list = [np.clip(leg_torques_all, -self.leg_torque_limits, self.leg_torque_limits)]
+        if self.has_wheels:
+            wheel_torques = self.control_manager.pd_controller(0.0, 0.0, 0.0, self.kd_wheel, action_scaled[8:10], dof_vel[8:10])
+            torques_list.append(np.clip(wheel_torques, -self.wheel_torque_limits, self.wheel_torque_limits))
+        self.applied_torques = np.concatenate(torques_list)
+        return self._to_actuator_order(self.applied_torques)
+
     def _get_obs(self):
         dof_pos = self.data.qpos[self.q_indices].copy()
         dof_vel = self.data.qvel[self.qd_indices].copy()
@@ -244,7 +260,11 @@ class FlamingoP10dof(MujocoEnv, utils.EzPickle):
 
         self.applied_torques = np.concatenate(torques_list)
         sim_torques = self._to_actuator_order(self.applied_torques)
-        self.do_simulation(sim_torques, self.frame_skip)
+        simulate_actuator_mode(
+            self,
+            lambda: self._update_pd_ctrl(action_scaled),
+            position_ctrl=self._to_actuator_order(action_scaled),
+        )
 
         obs = self._get_obs()
         info = self._get_info()

@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLabel, QLineEdit, QDialogButtonBox,
-    QScrollArea, QWidget, QCheckBox
+    QScrollArea, QWidget, QCheckBox, QComboBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDoubleValidator
@@ -38,7 +38,14 @@ class HardwareSettingsDialog(QDialog):
         # Build editable fields for each hardware setting
         for key, value in self.hardware_settings.items():
             label = QLabel(key)
-            if isinstance(value, bool):
+            if key == "actuator_mode":
+                cb = QComboBox()
+                cb.addItems(["torque", "position"])
+                current = str(value).strip().lower()
+                cb.setCurrentText(current if current in ("torque", "position") else "torque")
+                form_layout.addRow(label, cb)
+                self.fields[key] = cb
+            elif isinstance(value, bool):
                 cb = QCheckBox()
                 cb.setChecked(value)
                 form_layout.addRow(label, cb)
@@ -69,6 +76,8 @@ class HardwareSettingsDialog(QDialog):
         for key, widget in self.fields.items():
             if isinstance(widget, QCheckBox):
                 settings[key] = widget.isChecked()
+            elif isinstance(widget, QComboBox):
+                settings[key] = widget.currentText()
             else:
                 settings[key] = widget.text()
         return settings

@@ -27,6 +27,7 @@
   "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0]
   "hardware":
     "action_dim": 16
+    "actuator_mode": "torque"
     "Kp_hip": 100
     "Kp_shoulder": 100
     "Kp_leg": 120
@@ -71,6 +72,7 @@
   "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0]
   "hardware":
     "action_dim": 16
+    "actuator_mode": "torque"
     "Kp_hip": 100
     "Kp_shoulder": 100
     "Kp_leg": 120
@@ -118,6 +120,7 @@
   "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0]
   "hardware":
     "action_dim": 8
+    "actuator_mode": "torque"
     "Kp_hip": 70
     "Kp_shoulder": 70
     "Kp_leg": 70
@@ -165,6 +168,7 @@
   "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
   "hardware":
     "action_dim": 8
+    "actuator_mode": "torque"
     "Kp_hip": 70
     "Kp_shoulder": 70
     "Kp_leg": 70
@@ -221,6 +225,7 @@
   "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
   "hardware":
     "action_dim": 8
+    "actuator_mode": "torque"
     "Kp_hip": 70
     "Kp_shoulder": 70
     "Kp_leg": 70
@@ -267,6 +272,7 @@
   "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0, 40.0, 40.0]
   "hardware":
     "action_dim": 16
+    "actuator_mode": "torque"
     "Kp_hip": 100
     "Kp_shoulder": 100
     "Kp_leg": 120
@@ -323,6 +329,7 @@
     "debug_print": false
   "hardware":
     "action_dim": 4
+    "actuator_mode": "torque"
     "Kp_shoulder": 35 
     "Kd_shoulder": 0.45
     "Kd_wheel": 0.3
@@ -357,9 +364,10 @@
     "size_y": 0.6
     "res_x": 15
     "res_y": 9
-  "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   "hardware":
-    "action_dim": 16
+    "action_dim": 23
+    "actuator_mode": "torque"
     "Kp_hip_pitch": 200
     "Kp_torso": 100
     "Kp_hip_roll": 150
@@ -453,37 +461,37 @@
     "torso_pitch_roll_gear_ratio_1": 1.0
     "torso_pitch_roll_gear_ratio_2": 1.0
 
-    "Kp_hip_pitch": 150
-    "Kp_torso_yaw": 300
+    "Kp_hip_pitch": 100
+    "Kp_torso_yaw": 100
     "Kp_torso_pitch": 100
     "Kp_torso_roll": 100
-    "Kp_hip_roll": 150
+    "Kp_hip_roll": 100
     "Kp_shoulder_pitch": 100
-    "Kp_hip_yaw": 150
+    "Kp_hip_yaw": 100
     "Kp_shoulder_roll": 100
-    "Kp_knee": 200
-    "Kp_shoulder_yaw": 50
-    "Kp_ankle_pitch": 10
-    "Kp_ankle_roll": 10
+    "Kp_knee": 100
+    "Kp_shoulder_yaw": 25
+    "Kp_ankle_pitch": 20
+    "Kp_ankle_roll": 20
     "Kp_elbow": 50
     "Kp_wrist": 50
-    "Kp_head": 50
+    "Kp_head": 100
 
-    "Kd_hip_pitch": 2
-    "Kd_torso_yaw": 6
-    "Kd_torso_pitch": 2
-    "Kd_torso_roll": 2
-    "Kd_hip_roll": 2
-    "Kd_shoulder_pitch": 2
-    "Kd_hip_yaw": 2
-    "Kd_shoulder_roll": 2
-    "Kd_knee": 4
-    "Kd_shoulder_yaw": 2
-    "Kd_ankle_pitch": 0.5
-    "Kd_ankle_roll": 0.5
-    "Kd_elbow": 2
-    "Kd_wrist": 2
-    "Kd_head": 2
+    "Kd_hip_pitch": 1.0
+    "Kd_torso_yaw": 1.0
+    "Kd_torso_pitch": 1.0
+    "Kd_torso_roll": 1.0
+    "Kd_hip_roll": 1.0
+    "Kd_shoulder_pitch": 1.0
+    "Kd_hip_yaw": 1.0
+    "Kd_shoulder_roll": 1.0
+    "Kd_knee": 1.0
+    "Kd_shoulder_yaw": 1.0
+    "Kd_ankle_pitch": 0.25
+    "Kd_ankle_roll": 0.25
+    "Kd_elbow": 1.0
+    "Kd_wrist": 1.0
+    "Kd_head": 1.0
 
     "hip_roll_joint_max_torque": 60
     "hip_roll_joint_max_vel": 20
@@ -551,6 +559,7 @@
   "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 40.0, 40.0]
   "hardware":
     "action_dim": 10
+    "actuator_mode": "torque"
     "Kp_hip_pitch": 70
     "Kp_hip_roll": 70
     "Kp_hip_yaw": 70
