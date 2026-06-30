@@ -34,8 +34,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
       - elbow is 1DoF per arm: *_elbow_joint  (no elbow_pitch/yaw split)
       - wrist is 1DoF per arm: *_wrist_joint
       - head_joint included
-    Action / dof_pos / dof_vel order (26) follows IsaacLab asset/URDF joint order.
-    With joint_names=[".*"], IsaacLab resolves actions in the asset's joint list order.
+    Action / dof_pos / dof_vel order (26) follows the policy joint order.
     """
 
     metadata = {"render_modes": ["human", "rgb_array", "depth_array"]}
@@ -193,34 +192,34 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             self.res_x = 0
             self.res_y = 0
 
-        # --- Controlled joint order (26), matching IsaacLab asset/URDF joint order ---
+        # --- Controlled joint order (26), matching policy observation/action order ---
         self.joint_names_in_order = [
             "left_hip_pitch_joint",
-            "left_hip_roll_joint",
-            "left_hip_yaw_joint",
             "left_knee_joint",
+            "left_hip_roll_joint",
             "left_ankle_pitch_joint",
+            "left_hip_yaw_joint",
             "left_ankle_roll_joint",
             "right_hip_pitch_joint",
-            "right_hip_roll_joint",
-            "right_hip_yaw_joint",
             "right_knee_joint",
+            "right_hip_roll_joint",
             "right_ankle_pitch_joint",
+            "right_hip_yaw_joint",
             "right_ankle_roll_joint",
             "torso_yaw_joint",
+            "head_joint",
             "torso_pitch_joint",
             "torso_roll_joint",
             "left_shoulder_pitch_joint",
-            "left_shoulder_roll_joint",
-            "left_shoulder_yaw_joint",
-            "left_elbow_joint",
-            "left_wrist_joint",
             "right_shoulder_pitch_joint",
+            "left_shoulder_roll_joint",
             "right_shoulder_roll_joint",
+            "left_shoulder_yaw_joint",
             "right_shoulder_yaw_joint",
+            "left_elbow_joint",
             "right_elbow_joint",
+            "left_wrist_joint",
             "right_wrist_joint",
-            "head_joint",
         ]
         self.actuator_joint_names_in_order = [
             "head_joint",
@@ -354,10 +353,11 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             ids = [self.joint_names_in_order.index(joint_name) for joint_name in joint_names]
             if cfg["g1"] == 0.0 or cfg["g2"] == 0.0:
                 raise ValueError(f"{name} coupled actuator gear ratios must be non-zero.")
+            ids = np.array(ids, dtype=np.int64)
             pairs.append(
                 {
                     "name": name,
-                    "ids": np.array(ids, dtype=np.int64),
+                    "ids": ids,
                     "g1": cfg["g1"],
                     "g2": cfg["g2"],
                     "gamma": cfg["gamma"],
@@ -370,16 +370,21 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         motor_value = np.asarray(joint_value, dtype=np.float64).copy()
         for pair in self.coupled_pairs:
             ids = pair["ids"]
-            pitch = motor_value[ids[0]]
-            roll = motor_value[ids[1]]
+            pitch = joint_value[ids[0]]
+            roll = joint_value[ids[1]]
             g1 = pair["g1"]
             g2 = pair["g2"]
-            if pair["mirror"]:
-                motor_1 = g1 * (pitch - roll)
-                motor_2 = g2 * (pitch + roll)
+            if pair["name"] == "left_ankle":
+                motor_1 = -g1 * (roll - pitch)
+                motor_2 = -g2 * (roll + pitch)
+            elif pair["name"] == "right_ankle":
+                motor_1 = -g1 * (roll + pitch)
+                motor_2 = -g2 * (roll - pitch)
+            elif pair["name"] == "torso_pitch_roll":
+                motor_1 = g1 * (roll - pitch)
+                motor_2 = -g2 * (roll + pitch)
             else:
-                motor_1 = g1 * (pitch + roll)
-                motor_2 = g2 * (pitch - roll)
+                raise ValueError(f"Unhandled coupled pair: {pair['name']}")
             motor_value[ids[0]] = motor_1
             motor_value[ids[1]] = motor_2
         return motor_value
@@ -392,11 +397,19 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             motor_2 = motor_value[ids[1]]
             g1 = pair["g1"]
             g2 = pair["g2"]
-            pitch = 0.5 * (motor_1 / g1 + motor_2 / g2)
-            if pair["mirror"]:
-                roll = 0.5 * (-motor_1 / g1 + motor_2 / g2)
+            m1 = motor_1 / g1
+            m2 = motor_2 / g2
+            if pair["name"] == "left_ankle":
+                pitch = 0.5 * (m1 - m2)
+                roll = -0.5 * (m1 + m2)
+            elif pair["name"] == "right_ankle":
+                pitch = 0.5 * (m2 - m1)
+                roll = -0.5 * (m1 + m2)
+            elif pair["name"] == "torso_pitch_roll":
+                pitch = -0.5 * (m1 + m2)
+                roll = 0.5 * (m1 - m2)
             else:
-                roll = 0.5 * (motor_1 / g1 - motor_2 / g2)
+                raise ValueError(f"Unhandled coupled pair: {pair['name']}")
             joint_value[ids[0]] = pitch
             joint_value[ids[1]] = roll
         return joint_value
@@ -429,11 +442,17 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             g1 = pair["g1"]
             g2 = pair["g2"]
             gamma = pair["gamma"]
-            tau_pitch = g1 * tau_m1 + g2 * tau_m2
-            if pair["mirror"]:
-                tau_roll = -g1 * tau_m1 + g2 * tau_m2
-            else:
+            if pair["name"] == "left_ankle":
+                tau_pitch = g1 * tau_m1 - g2 * tau_m2
+                tau_roll = -g1 * tau_m1 - g2 * tau_m2
+            elif pair["name"] == "right_ankle":
+                tau_pitch = -g1 * tau_m1 + g2 * tau_m2
+                tau_roll = -g1 * tau_m1 - g2 * tau_m2
+            elif pair["name"] == "torso_pitch_roll":
+                tau_pitch = -g1 * tau_m1 - g2 * tau_m2
                 tau_roll = g1 * tau_m1 - g2 * tau_m2
+            else:
+                raise ValueError(f"Unhandled coupled pair: {pair['name']}")
             joint_tau[ids[0]] = gamma * tau_pitch
             joint_tau[ids[1]] = gamma * tau_roll
         return joint_tau
@@ -624,7 +643,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         if self.coupled_control_enabled:
             dof_pos = self._joint_to_motor(dof_pos)
             dof_vel = self._joint_to_motor(dof_vel)
-        motor_torques = self.kp_by_joint * (action_scaled - dof_pos) - self.kd_by_joint * dof_vel
+        motor_torques = self.kp_by_joint * (action_scaled - dof_pos)
         joint_torques = self._motor_to_joint_torque(motor_torques) if self.coupled_control_enabled else motor_torques
         self.computed_torques = joint_torques.astype(np.float64)
         self.applied_torques = np.clip(

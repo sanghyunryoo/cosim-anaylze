@@ -211,7 +211,7 @@ class XMLManager:
             },
             "upper_imu_link": {
                 "parent": "torso_roll_link",
-                "pos": "0.00075 0.368 0.000183254044262509",
+                "pos": "0.00025 0.41400 0",
                 "quat": "0.5 -0.5 -0.5 -0.5",
                 "mesh": "upper_imu_link",
                 "sensor_prefix": "upper_imu",
@@ -424,7 +424,7 @@ class XMLManager:
                 joint.attrib["frictionloss"] = str(self.config["random"]["friction_loss"])
             else:
                 _, kd = self._pd_gains_for_joint(joint_name)
-            joint.attrib["damping"] = str(kd if actuator_mode == "position" else 0.0)
+            joint.attrib["damping"] = str(kd)
             joint_ranges[joint_name] = joint.attrib.get("range", "-3.14 3.14")
 
         actuator = root.find("actuator")
