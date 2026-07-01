@@ -198,7 +198,7 @@ class XMLManager:
                 ET.SubElement(
                     asset,
                     "mesh",
-                    {"name": mesh_name, "file": f"../mesh_v2/{mesh_name}.STL"},
+                    {"name": mesh_name, "file": f"../mesh/visual/{mesh_name}.STL"},
                 )
                 existing_meshes.add(mesh_name)
 
@@ -274,18 +274,14 @@ class XMLManager:
                     existing_names.add(attrib["name"])
 
     def get_model_path(self):
-        # The current Isaac policy was trained from the URDF/USD model, not the
-        # older hand-edited mesh_v2 XML.  Use the URDF-converted MuJoCo model so
-        # principal-axis inertias, convex collision meshes, and fixed-joint
-        # merges match the training asset as closely as this sim-to-sim path can.
-        original_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'humanoid_light_v2_from_urdf.xml')
+        # Use the URDF-converted MuJoCo model with the unified mesh directory.
+        original_model_path = os.path.join(self.cur_dir, '..', 'assets', 'xml', 'humanoid_light_v2.xml')
         tree = ET.parse(original_model_path)
         root = tree.getroot()
         self._ensure_imu_links_and_sensors(root)
 
-        # Keep URDF-converted convex meshes for collision, but use the decimated
-        # mesh_v2 assets for visuals.  The mesh_v2 files are the MuJoCo-safe
-        # Blender-decimated versions of the original URDF visuals.
+        # Keep source meshes for collision, and use *_modified meshes from the
+        # unified mesh directory for visuals when available.
         asset = root.find("asset")
         visual_mesh_names = set()
         if asset is not None:
@@ -294,14 +290,15 @@ class XMLManager:
                 mesh_file = mesh.attrib.get("file")
                 if not mesh_name or not mesh_file:
                     continue
-                basename = os.path.basename(mesh_file)
-                stem, ext = os.path.splitext(basename)
-                modified = os.path.join(self.cur_dir, "..", "assets", "mesh_v2", f"{stem}_modified{ext}")
-                plain = os.path.join(self.cur_dir, "..", "assets", "mesh_v2", basename)
+                if "/collision/" not in mesh_file:
+                    continue
+                _, ext = os.path.splitext(os.path.basename(mesh_file))
+                modified = os.path.join(self.cur_dir, "..", "assets", "mesh", "visual", f"{mesh_name}_modified{ext}")
+                plain = os.path.join(self.cur_dir, "..", "assets", "mesh", "visual", f"{mesh_name}{ext}")
                 if os.path.isfile(modified):
-                    visual_file = f"../mesh_v2/{stem}_modified{ext}"
+                    visual_file = f"../mesh/visual/{mesh_name}_modified{ext}"
                 elif os.path.isfile(plain):
-                    visual_file = f"../mesh_v2/{basename}"
+                    visual_file = f"../mesh/visual/{mesh_name}{ext}"
                 else:
                     continue
                 visual_name = f"{mesh_name}_visual"
@@ -327,7 +324,7 @@ class XMLManager:
                     continue
 
                 visual_attrib = {
-                    "name": f"{geom_name}_mesh_v2_visual",
+                    "name": f"{geom_name}_mesh_visual",
                     "type": "mesh",
                     "mesh": f"{mesh_name}_visual",
                     "class": "visual",

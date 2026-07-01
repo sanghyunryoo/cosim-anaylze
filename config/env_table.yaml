@@ -475,7 +475,7 @@
     "Kp_ankle_roll": 20
     "Kp_elbow": 50
     "Kp_wrist": 50
-    "Kp_head": 100
+    "Kp_head": 20
 
     "Kd_hip_pitch": 1.0
     "Kd_torso_yaw": 1.0
@@ -491,7 +491,7 @@
     "Kd_ankle_roll": 0.25
     "Kd_elbow": 1.0
     "Kd_wrist": 1.0
-    "Kd_head": 1.0
+    "Kd_head": 0.25
 
     "hip_roll_joint_max_torque": 60
     "hip_roll_joint_max_vel": 20

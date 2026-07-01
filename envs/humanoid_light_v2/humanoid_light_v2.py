@@ -68,7 +68,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         self.kp_torso_yaw = hw.get("Kp_torso_yaw", hw.get("Kp_torso", 100))
         self.kp_torso_pitch = hw.get("Kp_torso_pitch", hw.get("Kp_torso", 100))
         self.kp_torso_roll = hw.get("Kp_torso_roll", hw.get("Kp_torso", 100))
-        self.kp_head = hw.get("Kp_head", 100)
+        self.kp_head = hw.get("Kp_head", 20)
 
         self.kp_shoulder_pitch = hw.get("Kp_shoulder_pitch", 100)
         self.kp_shoulder_roll = hw.get("Kp_shoulder_roll", 100)
@@ -95,7 +95,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         self.kd_torso_yaw = hw.get("Kd_torso_yaw", hw.get("Kd_torso", 1.0))
         self.kd_torso_pitch = hw.get("Kd_torso_pitch", hw.get("Kd_torso", 1.0))
         self.kd_torso_roll = hw.get("Kd_torso_roll", hw.get("Kd_torso", 1.0))
-        self.kd_head = hw.get("Kd_head", 1.0)
+        self.kd_head = hw.get("Kd_head", 0.25)
 
         self.kd_shoulder_pitch = hw.get("Kd_shoulder_pitch", 1.0)
         self.kd_shoulder_roll = hw.get("Kd_shoulder_roll", 1.0)
