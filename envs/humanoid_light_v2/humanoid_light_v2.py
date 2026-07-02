@@ -221,21 +221,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             "left_wrist_joint",
             "right_wrist_joint",
         ]
-        self.actuator_joint_names_in_order = [
-            "head_joint",
-            "left_hip_pitch_joint", "right_hip_pitch_joint",
-            "left_hip_roll_joint", "right_hip_roll_joint",
-            "left_hip_yaw_joint", "right_hip_yaw_joint",
-            "left_knee_joint", "right_knee_joint",
-            "left_ankle_pitch_joint", "right_ankle_pitch_joint",
-            "left_ankle_roll_joint", "right_ankle_roll_joint",
-            "torso_yaw_joint", "torso_roll_joint", "torso_pitch_joint",
-            "left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
-            "left_shoulder_roll_joint", "right_shoulder_roll_joint",
-            "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",
-            "left_elbow_joint", "right_elbow_joint",
-            "left_wrist_joint", "right_wrist_joint",
-        ]
+        self.actuator_joint_names_in_order = list(self.joint_names_in_order)
 
         # If config action_dim mismatches, prefer the joint list length for safety.
         if self.action_dim != len(self.joint_names_in_order):

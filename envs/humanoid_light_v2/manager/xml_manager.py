@@ -181,7 +181,11 @@ class XMLManager:
                 raise ValueError(f"{pair_name} requires equal Kd for both motor slots for position-mode coupled control.")
 
             gain_scale = 2.0 * abs(g1) * abs(g1) * gamma
-            equivalent_gains = (gain_scale * float(kp1), gain_scale * float(kd1))
+            # Position actuators still need the motor-space P gain converted to
+            # joint-space stiffness, but D is handled by MuJoCo joint damping at
+            # each physics substep. Keep damping at the raw Kd to match torque
+            # mode's D-bypass behavior.
+            equivalent_gains = (gain_scale * float(kp1), float(kd1))
             gains_by_joint[joint_names[0]] = equivalent_gains
             gains_by_joint[joint_names[1]] = equivalent_gains
         return gains_by_joint
@@ -198,7 +202,7 @@ class XMLManager:
                 ET.SubElement(
                     asset,
                     "mesh",
-                    {"name": mesh_name, "file": f"../mesh/visual/{mesh_name}.STL"},
+                    {"name": mesh_name, "file": f"../mesh/{mesh_name}.STL"},
                 )
                 existing_meshes.add(mesh_name)
 
@@ -290,15 +294,15 @@ class XMLManager:
                 mesh_file = mesh.attrib.get("file")
                 if not mesh_name or not mesh_file:
                     continue
-                if "/collision/" not in mesh_file:
+                if mesh_name in {"lower_imu_link", "upper_imu_link"} or mesh_name.endswith("_visual"):
                     continue
                 _, ext = os.path.splitext(os.path.basename(mesh_file))
-                modified = os.path.join(self.cur_dir, "..", "assets", "mesh", "visual", f"{mesh_name}_modified{ext}")
-                plain = os.path.join(self.cur_dir, "..", "assets", "mesh", "visual", f"{mesh_name}{ext}")
+                modified = os.path.join(self.cur_dir, "..", "assets", "mesh", f"{mesh_name}_modified{ext}")
+                plain = os.path.join(self.cur_dir, "..", "assets", "mesh", f"{mesh_name}{ext}")
                 if os.path.isfile(modified):
-                    visual_file = f"../mesh/visual/{mesh_name}_modified{ext}"
+                    visual_file = f"../mesh/{mesh_name}_modified{ext}"
                 elif os.path.isfile(plain):
-                    visual_file = f"../mesh/visual/{mesh_name}{ext}"
+                    visual_file = f"../mesh/{mesh_name}{ext}"
                 else:
                     continue
                 visual_name = f"{mesh_name}_visual"

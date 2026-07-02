@@ -21,35 +21,35 @@
     <material name="collision_material" rgba="1 1 1 0.9" />
     <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300" />
     <material name="MatPlane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2" />
-    <mesh name="pelvis_link" file="../mesh/collision/pelvis_link_collision.STL" />
-    <mesh name="left_hip_pitch_link" file="../mesh/collision/left_hip_pitch_link_collision.STL" />
-    <mesh name="left_hip_roll_link" file="../mesh/collision/left_hip_roll_link_collision.STL" />
-    <mesh name="left_hip_yaw_link" file="../mesh/collision/left_hip_yaw_link_collision.STL" />
-    <mesh name="left_knee_link" file="../mesh/collision/left_knee_link_collision.STL" />
-    <mesh name="left_ankle_pitch_link" file="../mesh/collision/left_ankle_pitch_link_collision.STL" />
-    <mesh name="left_ankle_roll_link" file="../mesh/collision/left_ankle_roll_link_collision.STL" />
-    <mesh name="right_hip_pitch_link" file="../mesh/collision/right_hip_pitch_link_collision.STL" />
-    <mesh name="right_hip_roll_link" file="../mesh/collision/right_hip_roll_link_collision.STL" />
-    <mesh name="right_hip_yaw_link" file="../mesh/collision/right_hip_yaw_link_collision.STL" />
-    <mesh name="right_knee_link" file="../mesh/collision/right_knee_link_collision.STL" />
-    <mesh name="right_ankle_pitch_link" file="../mesh/collision/right_ankle_pitch_link_collision.STL" />
-    <mesh name="right_ankle_roll_link" file="../mesh/collision/right_ankle_roll_link_collision.STL" />
-    <mesh name="torso_yaw_link" file="../mesh/collision/torso_yaw_link_collision.STL" />
-    <mesh name="torso_pitch_link" file="../mesh/collision/torso_pitch_link_collision.STL" />
-    <mesh name="torso_roll_link" file="../mesh/collision/torso_roll_link_collision.STL" />
-    <mesh name="lower_cam_link" file="../mesh/collision/lower_cam_link_collision.STL" />
-    <mesh name="left_shoulder_pitch_link" file="../mesh/collision/left_shoulder_pitch_link_collision.STL" />
-    <mesh name="left_shoulder_roll_link" file="../mesh/collision/left_shoulder_roll_link_collision.STL" />
-    <mesh name="left_shoulder_yaw_link" file="../mesh/collision/left_shoulder_yaw_link_collision.STL" />
-    <mesh name="left_elbow_link" file="../mesh/collision/left_elbow_link_collision.STL" />
-    <mesh name="left_wrist_link" file="../mesh/collision/left_wrist_link_collision.STL" />
-    <mesh name="right_shoulder_pitch_link" file="../mesh/collision/right_shoulder_pitch_link_collision.STL" />
-    <mesh name="right_shoulder_roll_link" file="../mesh/collision/right_shoulder_roll_link_collision.STL" />
-    <mesh name="right_shoulder_yaw_link" file="../mesh/collision/right_shoulder_yaw_link_collision.STL" />
-    <mesh name="right_elbow_link" file="../mesh/collision/right_elbow_link_collision.STL" />
-    <mesh name="right_wrist_link" file="../mesh/collision/right_wrist_link_collision.STL" />
-    <mesh name="head_link" file="../mesh/collision/head_link_collision.STL" />
-    <mesh name="head_cam_link" file="../mesh/collision/head_cam_link_collision.STL" />
+    <mesh name="pelvis_link" file="../mesh/pelvis_link_modified.STL" />
+    <mesh name="left_hip_pitch_link" file="../mesh/left_hip_pitch_link.STL" />
+    <mesh name="left_hip_roll_link" file="../mesh/left_hip_roll_link.STL" />
+    <mesh name="left_hip_yaw_link" file="../mesh/left_hip_yaw_link_modified.STL" />
+    <mesh name="left_knee_link" file="../mesh/left_knee_link_modified.STL" />
+    <mesh name="left_ankle_pitch_link" file="../mesh/left_ankle_pitch_link.STL" />
+    <mesh name="left_ankle_roll_link" file="../mesh/left_ankle_roll_link.STL" />
+    <mesh name="right_hip_pitch_link" file="../mesh/right_hip_pitch_link.STL" />
+    <mesh name="right_hip_roll_link" file="../mesh/right_hip_roll_link.STL" />
+    <mesh name="right_hip_yaw_link" file="../mesh/right_hip_yaw_link_modified.STL" />
+    <mesh name="right_knee_link" file="../mesh/right_knee_link_modified.STL" />
+    <mesh name="right_ankle_pitch_link" file="../mesh/right_ankle_pitch_link.STL" />
+    <mesh name="right_ankle_roll_link" file="../mesh/right_ankle_roll_link.STL" />
+    <mesh name="torso_yaw_link" file="../mesh/torso_yaw_link.STL" />
+    <mesh name="torso_pitch_link" file="../mesh/torso_pitch_link.STL" />
+    <mesh name="torso_roll_link" file="../mesh/torso_roll_link_modified.STL" />
+    <mesh name="lower_cam_link" file="../mesh/lower_cam_link.STL" />
+    <mesh name="left_shoulder_pitch_link" file="../mesh/left_shoulder_pitch_link.STL" />
+    <mesh name="left_shoulder_roll_link" file="../mesh/left_shoulder_roll_link.STL" />
+    <mesh name="left_shoulder_yaw_link" file="../mesh/left_shoulder_yaw_link.STL" />
+    <mesh name="left_elbow_link" file="../mesh/left_elbow_link_modified.STL" />
+    <mesh name="left_wrist_link" file="../mesh/left_wrist_link.STL" />
+    <mesh name="right_shoulder_pitch_link" file="../mesh/right_shoulder_pitch_link.STL" />
+    <mesh name="right_shoulder_roll_link" file="../mesh/right_shoulder_roll_link.STL" />
+    <mesh name="right_shoulder_yaw_link" file="../mesh/right_shoulder_yaw_link.STL" />
+    <mesh name="right_elbow_link" file="../mesh/right_elbow_link_modified.STL" />
+    <mesh name="right_wrist_link" file="../mesh/right_wrist_link.STL" />
+    <mesh name="head_link" file="../mesh/head_link.STL" />
+    <mesh name="head_cam_link" file="../mesh/head_cam_link.STL" />
     <hfield name="flat" file="../terrain/flat.png" nrow="256" ncol="256" size="140 140 10 0.1" />
     <hfield name="rocky_easy" file="../terrain/rocky_easy.png" nrow="512" ncol="512" size="140 140 0.1 0.1" />
     <hfield name="rocky_hard" file="../terrain/rocky_hard.png" nrow="512" ncol="512" size="140 140 0.25 0.1" />
@@ -203,22 +203,22 @@
     </body>
   </worldbody>
   <actuator>
-    <motor name="head_joint_ctrl" joint="head_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="left_hip_pitch_joint_ctrl" joint="left_hip_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="right_hip_pitch_joint_ctrl" joint="right_hip_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="left_hip_roll_joint_ctrl" joint="left_hip_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="right_hip_roll_joint_ctrl" joint="right_hip_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="left_hip_yaw_joint_ctrl" joint="left_hip_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="right_hip_yaw_joint_ctrl" joint="right_hip_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="left_knee_joint_ctrl" joint="left_knee_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="right_knee_joint_ctrl" joint="right_knee_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="left_hip_roll_joint_ctrl" joint="left_hip_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="left_ankle_pitch_joint_ctrl" joint="left_ankle_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="right_ankle_pitch_joint_ctrl" joint="right_ankle_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="left_hip_yaw_joint_ctrl" joint="left_hip_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="left_ankle_roll_joint_ctrl" joint="left_ankle_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="right_hip_pitch_joint_ctrl" joint="right_hip_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="right_knee_joint_ctrl" joint="right_knee_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="right_hip_roll_joint_ctrl" joint="right_hip_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="right_ankle_pitch_joint_ctrl" joint="right_ankle_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="right_hip_yaw_joint_ctrl" joint="right_hip_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="right_ankle_roll_joint_ctrl" joint="right_ankle_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="torso_yaw_joint_ctrl" joint="torso_yaw_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
-    <motor name="torso_roll_joint_ctrl" joint="torso_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="head_joint_ctrl" joint="head_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="torso_pitch_joint_ctrl" joint="torso_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
+    <motor name="torso_roll_joint_ctrl" joint="torso_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="left_shoulder_pitch_joint_ctrl" joint="left_shoulder_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="right_shoulder_pitch_joint_ctrl" joint="right_shoulder_pitch_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />
     <motor name="left_shoulder_roll_joint_ctrl" joint="left_shoulder_roll_joint" ctrllimited="true" ctrlrange="-1000 1000" gear="1" />

@@ -99,7 +99,7 @@ INITIAL_POSE_METADATA = {
         ],
     },
     "humanoid_light_v2": {
-        "base_z": 0.75,
+        "base_z": 0.72,
         "joint_names": [
             "left_hip_pitch_joint",
             "left_knee_joint",
