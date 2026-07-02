@@ -130,7 +130,7 @@
       </body>
       <body name="torso_yaw_link" pos="0 0 0.078599998507631" quat="0.999999995253426 0 -9.74327909779722e-05 0">
         <inertial pos="0.0286453 -2.37603e-05 0.0212212" quat="0.481712 0.481708 -0.517646 0.517643" mass="0.313405" diaginertia="0.000209463 0.000155865 0.000104995" />
-        <joint name="torso_yaw_joint" pos="0 0 0" axis="0 0 1" range="-1.04 1.04" actuatorfrcrange="-60 60" />
+        <joint name="torso_yaw_joint" pos="0 0 0" axis="0 0 -1" range="-1.04 1.04" actuatorfrcrange="-60 60" />
         <geom type="mesh" rgba="0.866667 0.909804 1 1" mesh="torso_yaw_link" class="collision" name="torso_yaw_link_collision" />
         <body name="torso_pitch_link" pos="5.69363e-05 -0.00075 0.046" quat="0.707106781186546 0.707106781186549 0 0">
           <inertial pos="0 0 -0.00253061" mass="0.056094" diaginertia="1.99324e-05 1.99324e-05 2.99978e-06" />
@@ -193,7 +193,7 @@
             </body>
             <body name="head_link" pos="0.00074999999997896 0.446299990096844 -6.28719190816403e-05" quat="0.707106781186546 -0.707106781186549 0 0">
               <inertial pos="-0.000112712 -0.0245857 0.0612203" quat="0.482231 0.525416 -0.521815 0.468082" mass="0.210974325163766" diaginertia="0.000724995 0.000682039 0.000521198" />
-              <joint name="head_joint" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" actuatorfrcrange="-5.5 5.5" />
+              <joint name="head_joint" pos="0 0 0" axis="0 0 -1" range="-1.57 1.57" actuatorfrcrange="-5.5 5.5" />
               <geom type="mesh" rgba="1 1 1 1" mesh="head_link" class="collision" name="head_link_collision" />
               <geom pos="0.000633198 -0.0750651 0.0765697" quat="0 0 -0.707038 0.707176" type="mesh" rgba="0.894118 0.894118 0.894118 1" mesh="head_cam_link" class="collision" name="head_link_collision_1" />
             </body>
