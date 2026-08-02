@@ -28,6 +28,19 @@ INITIAL_POSE_METADATA = {
             "RL_wheel_joint", "RR_wheel_joint",
         ],
     },
+    "hd_dog": {
+        "base_z": 0.58,
+        "joint_names": [
+            "FL_hip_joint", "FR_hip_joint",
+            "FL_shoulder_joint", "FR_shoulder_joint",
+            "FL_leg_joint", "FR_leg_joint",
+            "FL_wheel_joint", "FR_wheel_joint",
+            "RL_hip_joint", "RR_hip_joint",
+            "RL_shoulder_joint", "RR_shoulder_joint",
+            "RL_leg_joint", "RR_leg_joint",
+            "RL_wheel_joint", "RR_wheel_joint",
+        ],
+    },
     "flamingo_p_v3": {
         "base_z": 0.4757,
         "joint_names": [

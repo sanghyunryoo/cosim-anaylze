@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QPushButton, QLabel, QMessageBox, QMainWindow,
     QFileDialog, QGroupBox, QScrollArea, QLineEdit, QCheckBox, QDialog,
-    QTextEdit
+    QTextEdit, QDoubleSpinBox, QSpinBox
 )
 from PyQt5.QtCore import QThread, Qt, QEvent, QUrl, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QDesktopServices, QFont, QFontDatabase, QIcon, QColor, QTextCharFormat, QTextCursor
@@ -584,8 +584,17 @@ class MainWindow(QMainWindow):
         return [
             'flat', 'rocky_easy', 'rocky_hard',
             'slope_easy', 'slope_hard',
+            'beam_easy',
             'stairs_up_easy', 'stairs_up_normal', 'stairs_up_hard', 'stairs_up_extrme'
         ]
+
+    def _update_beam_settings_enabled(self):
+        """Enable beam controls only for the terrain where they have an effect."""
+        is_beam_terrain = self.terrain_id_cb.currentText() == "beam_easy"
+        self.beam_settings_widget.setEnabled(is_beam_terrain)
+
+    def _on_terrain_changed(self, _terrain):
+        self._update_beam_settings_enabled()
 
     def _make_moe_defaults(self, env_id: str):
         action_scales = ",".join(str(v) for v in self._make_action_scale_defaults(env_id))
@@ -2375,20 +2384,51 @@ class MainWindow(QMainWindow):
         env_layout.addRow("Homing:", homing_row)
 
         self.terrain_id_cb = NoWheelComboBox()
-        self.terrain_id_cb.addItems([
-            'flat', 'rocky_easy', 'rocky_hard',
-            'slope_easy', 'slope_hard',
-            'stairs_up_easy', 'stairs_up_normal', 'stairs_up_hard', 'stairs_up_extrme'
-        ])
-
-        self.terrain_id_cb = NoWheelComboBox()
-        self.terrain_id_cb.addItems([
-            'flat', 'rocky_easy', 'rocky_hard',
-            'slope_easy', 'slope_hard',
-            'stairs_up_easy', 'stairs_up_normal', 'stairs_up_hard', 'stairs_up_extrme'
-        ])
+        self.terrain_id_cb.addItems(self._terrain_ids())
         self.terrain_id_cb.setCurrentText("flat")
         env_layout.addRow("Terrain:", self.terrain_id_cb)
+
+        self.beam_settings_widget = QWidget()
+        beam_layout = QHBoxLayout(self.beam_settings_widget)
+        beam_layout.setContentsMargins(0, 0, 0, 0)
+        beam_layout.setSpacing(6)
+        self.beam_spacing_sb = QDoubleSpinBox()
+        self.beam_spacing_sb.setRange(0.001, 5.0)
+        self.beam_spacing_sb.setDecimals(3)
+        self.beam_spacing_sb.setSingleStep(0.01)
+        self.beam_spacing_sb.setValue(0.79)
+        self.beam_spacing_sb.setSuffix(" m")
+        self.beam_spacing_sb.setToolTip("Center-to-center distance between adjacent beams.")
+        self.beam_start_sb = QDoubleSpinBox()
+        self.beam_start_sb.setRange(0.0, 20.0)
+        self.beam_start_sb.setDecimals(3)
+        self.beam_start_sb.setSingleStep(0.1)
+        self.beam_start_sb.setValue(2.0)
+        self.beam_start_sb.setSuffix(" m")
+        self.beam_start_sb.setToolTip("Distance from the robot spawn at the world origin to the first beam.")
+        self.beam_height_sb = QDoubleSpinBox()
+        self.beam_height_sb.setRange(0.011, 5.0)
+        self.beam_height_sb.setDecimals(3)
+        self.beam_height_sb.setSingleStep(0.01)
+        self.beam_height_sb.setValue(0.35)
+        self.beam_height_sb.setSuffix(" m")
+        self.beam_height_sb.setToolTip("Height of the top walking surface above the ground plane.")
+        self.beam_count_sb = QSpinBox()
+        self.beam_count_sb.setRange(1, 100)
+        self.beam_count_sb.setValue(12)
+        self.beam_count_sb.setToolTip("Number of beams placed along the course.")
+        beam_layout.addWidget(QLabel("Spacing"))
+        beam_layout.addWidget(self.beam_spacing_sb)
+        beam_layout.addWidget(QLabel("Start"))
+        beam_layout.addWidget(self.beam_start_sb)
+        beam_layout.addWidget(QLabel("Height"))
+        beam_layout.addWidget(self.beam_height_sb)
+        beam_layout.addWidget(QLabel("Count"))
+        beam_layout.addWidget(self.beam_count_sb)
+        beam_layout.addStretch()
+        env_layout.addRow("Beam:", self.beam_settings_widget)
+        self.terrain_id_cb.currentTextChanged.connect(self._on_terrain_changed)
+        self._update_beam_settings_enabled()
         parent_layout.addWidget(env_group, 1)
 
     def _create_policy_group(self, parent_layout):
@@ -4313,6 +4353,12 @@ class MainWindow(QMainWindow):
                 "env": {
                     "id": env_id,
                     "terrain": self.terrain_id_cb.currentText(),
+                    "beam": {
+                        "beam_spacing": self.beam_spacing_sb.value(),
+                        "beam_start_x": self.beam_start_sb.value(),
+                        "beam_height": self.beam_height_sb.value(),
+                        "beam_count": self.beam_count_sb.value(),
+                    },
                     "max_duration": float(self.max_duration_le.text().strip()),
                     "position_command": self.position_command_cb.isChecked()
                 },

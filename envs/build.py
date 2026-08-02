@@ -4,6 +4,7 @@ from envs.flamingo_p_v3_1.flamingo_p_v3 import FlamingoPV31
 from envs.flamingo_p_v3_2.flamingo_p_v3 import FlamingoPV32
 from envs.flamingo_p_10dof.flamingo_p_10dof import FlamingoP10dof
 from envs.bon_p_v1.bon_p_v1 import BonPV1
+from envs.hd_dog.hd_dog import HDDog
 from envs.wheeldog_p_v0.wheeldog_p_v0 import WheelDogPV0
 from envs.wheeldog_p_v2.wheeldog_p_v2 import WheelDogPV2
 from envs.humanoid_p_v0.humanoid_p_v0 import HumanoidPV0
@@ -33,6 +34,8 @@ def build_env(config):
       env = FlamingoLightPV3(config, render_flag=render_flag, render_mode=render_mode)  
     elif config["env"]['id'] == "bon_p_v1":
       env = BonPV1(config, render_flag=render_flag, render_mode=render_mode)
+    elif config["env"]['id'] == "hd_dog":
+      env = HDDog(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "wheeldog_p_v0":
       env = WheelDogPV0(config, render_flag=render_flag, render_mode=render_mode)
     elif config["env"]['id'] == "wheeldog_p_v2":

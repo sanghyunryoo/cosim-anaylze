@@ -9,6 +9,13 @@ class MuJoCoUtils:
     def __init__(self, model):
         self.model = model
         self.hf_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground")
+        self.ground_geom_type = (
+            int(self.model.geom_type[self.hf_geom_id]) if self.hf_geom_id != -1 else -1
+        )
+        self.has_beam_easy_geoms = any(
+            (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, i) or "").startswith("beam_easy_")
+            for i in range(self.model.ngeom)
+        )
         self.site_ids = None
 
     def get_body_indices_by_name(self, body_names):
@@ -126,11 +133,14 @@ class MuJoCoUtils:
             raise RuntimeError(
                 "Heightmap visualization sites not initialized. Call init_heightmap_visualization(res_x, res_x) first."
             )
-        if self.hf_geom_id == -1 or int(self.model.geom_type[self.hf_geom_id]) != int(mujoco.mjtGeom.mjGEOM_HFIELD):
+        is_hfield = self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_HFIELD)
+        is_beam_plane = self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_PLANE) and self.has_beam_easy_geoms
+        if self.hf_geom_id == -1 or not (is_hfield or is_beam_plane):
             return np.zeros((int(res_y) * int(res_x),), dtype=np.float64)
 
         # Extract robot base position (x, y, z) and orientation quaternion [w, x, y, z]
         robot_pos = data.qpos[0:3].astype(np.float64)
+        robot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
         raw_quat = data.qpos[3:7].astype(np.float64)
         R = MathUtils.quat_to_rot_matrix(raw_quat)  # 3×3 rotation matrix
 
@@ -168,8 +178,12 @@ class MuJoCoUtils:
                 # Ray direction: straight down
                 vec = np.array([[0.0], [0.0], [-1.0]], dtype=np.float64)
 
-                # Perform raycast against heightfield
-                dist = mujoco.mj_rayHfield(self.model, data, self.hf_geom_id, pnt, vec)
+                if is_hfield:
+                    dist = mujoco.mj_rayHfield(self.model, data, self.hf_geom_id, pnt, vec)
+                else:
+                    geomid = np.array([-1], dtype=np.int32)
+                    geomgroup = np.array([0, 1, 0, 0, 0, 0], dtype=np.uint8)
+                    dist = mujoco.mj_ray(self.model, data, pnt[:, 0], vec[:, 0], geomgroup, 1, robot_body_id, geomid)
 
                 if dist >= 0.0:
                     # Terrain height = ray_origin_z − dist

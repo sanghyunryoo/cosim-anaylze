@@ -12,6 +12,10 @@ class MuJoCoUtils:
         self.ground_geom_type = (
             int(self.model.geom_type[self.hf_geom_id]) if self.hf_geom_id != -1 else -1
         )
+        self.has_beam_easy_geoms = any(
+            (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, i) or "").startswith("beam_easy_")
+            for i in range(self.model.ngeom)
+        )
         self.site_ids = None
 
     def get_body_indices_by_name(self, body_names):
@@ -202,6 +206,12 @@ class MuJoCoUtils:
                         warnings.warn("No intersection with heightfield!")
                 elif self.ground_geom_type == int(mujoco.mjtGeom.mjGEOM_PLANE):
                     terrain_height = 0.0
+                    if self.has_beam_easy_geoms:
+                        geomid = np.array([-1], dtype=np.int32)
+                        geomgroup = np.array([0, 1, 0, 0, 0, 0], dtype=np.uint8)
+                        dist = mujoco.mj_ray(self.model, data, pnt[:, 0], vec[:, 0], geomgroup, 1, origin_body_id, geomid)
+                        if dist >= 0.0:
+                            terrain_height = pnt[2, 0] - dist
                     heightmap[i, j] = P_world[2] - terrain_height
                 else:
                     terrain_height = z_min_world

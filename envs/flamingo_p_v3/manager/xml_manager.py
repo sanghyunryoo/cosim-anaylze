@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 from envs.actuator_mode_utils import configure_actuator_xml
+from envs.terrain_utils import configure_terrain_xml
 
 
 class XMLManager:
@@ -29,16 +30,7 @@ class XMLManager:
 
         # 1. Set the terrain
         terrain = self.config["env"]["terrain"]
-        
-        for geom in root.findall('.//geom'):
-            if geom.attrib.get('name') == "ground":
-                if terrain == "flat":
-                    geom.attrib["type"] = "plane"
-                    geom.attrib.pop("hfield", None)
-                    geom.attrib["size"] = "100 100 0.1" 
-                else:
-                    geom.attrib["type"] = "hfield"
-                    geom.attrib["hfield"] = terrain
+        configure_terrain_xml(root, terrain, self.config["env"].get("beam"))
 
         # 2. Set the precision of the simulation
         precision_level = self.config["random"]["precision"]

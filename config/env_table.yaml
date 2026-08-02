@@ -20,10 +20,10 @@
     "4": 1.0
     "5": 1.0
   "height_map":
-    "size_x": 1.0
-    "size_y": 0.6
-    "res_x": 15
-    "res_y": 9
+    "size_x": 1.2
+    "size_y": 1.2
+    "res_x": 12
+    "res_y": 12
   "action_scales": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 40.0, 40.0]
   "hardware":
     "action_dim": 16
@@ -88,6 +88,73 @@
     "leg_max_vel": 50
     "wheel_max_torque": 40
     "wheel_max_vel": 50
+    "gear_ratio": 1.0
+    "gamma": 0.98
+
+"hd_dog":
+  "stacked_obs_order": ["dof_pos", "dof_vel", "ang_vel", "projected_gravity", "last_action"]
+  "stack_size": 1
+  "non_stacked_obs_order": []
+  "obs_scales":
+    "dof_pos": 1.0
+    "dof_vel": 0.05
+    "ang_vel": 0.25
+  "command":
+    "command_dim": 3
+    "command_3_initial": 0
+  "command_scales":
+    "0": 2.0
+    "1": 0.0
+    "2": 0.25
+    "3": 1.0
+    "4": 1.0
+    "5": 1.0
+  "height_map":
+    "size_x": 1.7
+    "size_y": 0.7
+    "res_x": 18
+    "res_y": 8
+  # Policy order: [LF pelvis/thigh/calf, RF pelvis/thigh/calf,
+  #                LH pelvis/thigh/calf, RH pelvis/thigh/calf,
+  #                LF/RF/LH/RH wheel].  Leg actions are relative to initial_pose.
+  "action_scales": [0.25, 0.5, 0.5, 0.25, 0.5, 0.5, 0.25, 0.5, 0.5, 0.25, 0.5, 0.5, 5.0, 5.0, 5.0, 5.0]
+  "initial_pose":
+    "base_z": 0.58
+    "joints":
+      "FL_hip_joint": 0.0
+      "FR_hip_joint": 0.0
+      "RL_hip_joint": 0.0
+      "RR_hip_joint": 0.0
+      "FL_shoulder_joint": 0.349066
+      "FR_shoulder_joint": 0.349066
+      "RL_shoulder_joint": 0.349066
+      "RR_shoulder_joint": 0.349066
+      "FL_leg_joint": -0.872665
+      "FR_leg_joint": -0.872665
+      "RL_leg_joint": -0.872665
+      "RR_leg_joint": -0.872665
+      "FL_wheel_joint": 0.0
+      "FR_wheel_joint": 0.0
+      "RL_wheel_joint": 0.0
+      "RR_wheel_joint": 0.0
+  "hardware":
+    "action_dim": 16
+    "actuator_mode": "torque"
+    "Kp_hip": 150
+    "Kp_shoulder": 150
+    "Kp_leg": 200
+    "Kd_hip": 1.5
+    "Kd_shoulder": 1.5
+    "Kd_leg": 2.0
+    "Kd_wheel": 1.5
+    "hip_max_torque": 120
+    "hip_max_vel": 13.3
+    "shoulder_max_torque": 120
+    "shoulder_max_vel": 13.3
+    "leg_max_torque": 290
+    "leg_max_vel": 10.47
+    "wheel_max_torque": 40
+    "wheel_max_vel": 17.28
     "gear_ratio": 1.0
     "gamma": 0.98
 

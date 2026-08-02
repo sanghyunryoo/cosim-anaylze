@@ -47,7 +47,7 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton, QGroupBox, QGridLayout,
     QScrollArea, QLineEdit, QWidget, QDialogButtonBox, QSizePolicy, QApplication, QStyle
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
 
 # Project helpers
@@ -68,6 +68,12 @@ class ObservationSettingsDialog(QDialog):
         """
         super().__init__(parent)
         self.setWindowTitle("Observation Settings")
+        self.setSizeGripEnabled(True)
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowMaximizeButtonHint
+        )
 
         # Keep obs_types consistent with MainWindow
         self.obs_types = [
@@ -96,6 +102,8 @@ class ObservationSettingsDialog(QDialog):
         # Command scale widgets
         self.cmd_scale_cbs = []
         self.command_scales_grid = None
+        self._auto_sizing = False
+        self._user_resized = False
 
         # Build UI and then load saved settings into it
         self._setup_ui()
@@ -313,13 +321,21 @@ class ObservationSettingsDialog(QDialog):
         self._outer_layout.addWidget(self._buttons)
 
         # Set width and auto-resize height after UI build
-        self.setMaximumWidth(900)
+        self.setMinimumSize(QSize(700, 400))
+        self._auto_sizing = True
+        self.resize(900, 600)
+        self._auto_sizing = False
         QTimer.singleShot(0, self._recalculate_height)
 
     # ---------- Sizing logic ----------
 
+    def resizeEvent(self, event):
+        if not self._auto_sizing:
+            self._user_resized = True
+        super().resizeEvent(event)
+
     def _recalculate_height(self):
-        """Measure content height and resize dialog accordingly (with a safe clamp)."""
+        """Measure content height and grow the dialog when content needs more room."""
         try:
             content_h = self._inner_widget.sizeHint().height()
             chrome_h = self._buttons.sizeHint().height()
@@ -335,12 +351,20 @@ class ObservationSettingsDialog(QDialog):
             max_h = int(avail_h * 0.90)
 
             target_h = max(400, min(max_h, total_h))
-            self.resize(900, target_h)
+            target_w = max(self.width(), 900)
+            if self._user_resized:
+                target_h = max(self.height(), target_h)
+                target_w = self.width()
+            self._auto_sizing = True
+            self.resize(target_w, target_h)
+            self._auto_sizing = False
         except Exception:
             # Fallback to a safe default if measurement fails
             scr = (self.screen() if hasattr(self, "screen") else None) or QApplication.primaryScreen()
             avail_h = scr.availableGeometry().height() if scr else 900
-            self.resize(900, int(avail_h * 0.90))
+            self._auto_sizing = True
+            self.resize(max(self.width(), 900), max(self.height(), int(avail_h * 0.90)))
+            self._auto_sizing = False
 
     # ---------- Command scale helpers ----------
 
