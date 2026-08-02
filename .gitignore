@@ -4,6 +4,10 @@
 # Ignore any .onnx files
 *.onnx
 
+# Local-only robot assets; never publish this environment.
+/envs/hd_dog/
+/envs/hd_dog.zip
+
 # Ignore any .pdf files
 *.pdf
 
