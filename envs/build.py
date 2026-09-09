@@ -9,7 +9,17 @@ from envs.wheeldog_p_v0.wheeldog_p_v0 import WheelDogPV0
 from envs.wheeldog_p_v2.wheeldog_p_v2 import WheelDogPV2
 from envs.humanoid_p_v0.humanoid_p_v0 import HumanoidPV0
 from envs.humanoid_light_v2.humanoid_light_v2 import HumanoidLightV2
-from envs.wrappers import StateBuildWrapper, TimeLimitWrapper, CommandWrapper
+from envs.humanoid_light_v2.reference_motion_loader import (
+    HumanoidLightReferenceMotion,
+    resolve_reference_motion,
+)
+from envs.wrappers import (
+    CommandWrapper,
+    ReferenceMotionResetWrapper,
+    ReferenceMotionTargetWrapper,
+    StateBuildWrapper,
+    TimeLimitWrapper,
+)
 
 
 def build_env(config):
@@ -21,6 +31,10 @@ def build_env(config):
 
     render_flag = bool(config.get("env", {}).get("render", True))
     render_mode = config.get("env", {}).get("render_mode", "human")
+
+    reference_cfg = config.get("reference_motion", {}) or {}
+    reference_enabled = bool(reference_cfg.get("enabled", False))
+    reference_motion = None
 
     if config["env"]['id'] == "flamingo_p_v3":
       env = FlamingoPV3(config, render_flag=render_flag, render_mode=render_mode)
@@ -47,8 +61,27 @@ def build_env(config):
     else:
       raise NameError(f"Please select a valid environment id. Received '{config['env']['id']}'.")
     
+    if reference_enabled:
+      if config["env"]['id'] != "humanoid_light_v2":
+        raise ValueError("Reference-motion inference is currently available only for humanoid_light_v2.")
+      reference_dir = reference_cfg.get("directory")
+      if not reference_dir:
+        raise ValueError("reference_motion.directory is required for Humanoid Light reference inference.")
+      reference_path = resolve_reference_motion(reference_cfg.get("motion"), reference_dir)
+      reference_motion = HumanoidLightReferenceMotion(reference_path, env.joint_names_in_order)
+      # Isaac uses the selected clip's frame count/fps as episode_length_s.
+      config["env"]["max_duration"] = reference_motion.duration_s
+      config["reference_motion"] = {
+        **reference_cfg,
+        "enabled": True,
+        "motion": str(reference_path),
+      }
+      env = ReferenceMotionResetWrapper(env, reference_motion, config)
+
     env = StateBuildWrapper(env, config)
     env = TimeLimitWrapper(env, config)
     env = CommandWrapper(env, config)
+    if reference_motion is not None:
+      env = ReferenceMotionTargetWrapper(env, reference_motion, control_freq=50.0, config=config)
 
     return env

@@ -45,6 +45,7 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
         self.config = config
         self.render_mode = render_mode
         self.render_flag = render_flag
+        self.reference_motion_enabled = bool((config.get("reference_motion", {}) or {}).get("enabled", False))
 
         self.action_dim = int(config["hardware"]["action_dim"])
         default_action_scales = np.ones(self.action_dim, dtype=np.float64) * 0.5
@@ -361,11 +362,11 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             g1 = pair["g1"]
             g2 = pair["g2"]
             if pair["name"] == "left_ankle":
-                motor_1 = -g1 * (roll - pitch)
-                motor_2 = -g2 * (roll + pitch)
+                motor_1 = g1 * (roll - pitch)
+                motor_2 = g2 * (roll + pitch)
             elif pair["name"] == "right_ankle":
-                motor_1 = -g1 * (roll + pitch)
-                motor_2 = -g2 * (roll - pitch)
+                motor_1 = g1 * (roll + pitch)
+                motor_2 = g2 * (roll - pitch)
             elif pair["name"] == "torso_pitch_roll":
                 motor_1 = g1 * (roll - pitch)
                 motor_2 = -g2 * (roll + pitch)
@@ -429,11 +430,11 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             g2 = pair["g2"]
             gamma = pair["gamma"]
             if pair["name"] == "left_ankle":
-                tau_pitch = g1 * tau_m1 - g2 * tau_m2
-                tau_roll = -g1 * tau_m1 - g2 * tau_m2
-            elif pair["name"] == "right_ankle":
                 tau_pitch = -g1 * tau_m1 + g2 * tau_m2
-                tau_roll = -g1 * tau_m1 - g2 * tau_m2
+                tau_roll = g1 * tau_m1 + g2 * tau_m2
+            elif pair["name"] == "right_ankle":
+                tau_pitch = g1 * tau_m1 - g2 * tau_m2
+                tau_roll = g1 * tau_m1 + g2 * tau_m2
             elif pair["name"] == "torso_pitch_roll":
                 tau_pitch = -g1 * tau_m1 - g2 * tau_m2
                 tau_roll = g1 * tau_m1 - g2 * tau_m2
@@ -602,6 +603,21 @@ class HumanoidLightV2(MujocoEnv, utils.EzPickle):
             )
         else:
             height_map_noisy = np.zeros((0,), dtype=np.float64)
+
+        # The exported Isaac reference policy was trained with observation
+        # corruption disabled.  Keep the ordinary locomotion path unchanged,
+        # but expose exact simulator values in the reference-inference path.
+        if self.reference_motion_enabled:
+            dof_pos_noisy = dof_pos
+            dof_vel_noisy = dof_vel
+            ang_vel_noisy = ang_vel
+            lower_imu_ang_vel_noisy = lower_imu_ang_vel
+            upper_imu_ang_vel_noisy = upper_imu_ang_vel
+            lin_vel_noisy = lin_vel
+            projected_gravity_noisy = projected_gravity
+            lower_imu_projected_gravity_noisy = lower_imu_projected_gravity
+            upper_imu_projected_gravity_noisy = upper_imu_projected_gravity
+            height_map_noisy = height_map if height_map is not None else np.zeros((0,), dtype=np.float64)
 
         return {
             "dof_pos": dof_pos_noisy,

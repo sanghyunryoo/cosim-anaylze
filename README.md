@@ -21,6 +21,7 @@ It is mainly used to load an ONNX policy, choose an environment, tune simulation
 
 - Run multiple MuJoCo environments from one GUI
 - Load ONNX policies and test them with keyboard command input
+- Export a same-input/output EMA-smoothed ONNX policy without retraining
 - Tune actuator, hardware, observation, and initial pose settings per environment
 - Apply randomization such as friction, mass noise, load, and action delay
 - Use built-in terrain presets such as `flat`, `rocky_*`, `slope_*`, and `stairs_*`
@@ -97,6 +98,13 @@ During rollout:
 - use the command buttons or keyboard shortcuts to send commands
 - watch logs in `Terminal Log`
 - stop the test with `Stop Test`
+
+### Fit a smoothed policy
+
+After selecting an environment and a single-input ONNX policy, set `New-action alpha` and click `Export Smoothed ONNX`.
+It exports `<source>_smoothed.onnx` without policy training. The graph uses the environment's existing
+`last_action` observation to calculate `alpha * raw_action + (1 - alpha) * previous_action`.
+The exported policy keeps the source observation input and action output interface; it does not add a previous-action input.
 
 ## Motor Monitor
 

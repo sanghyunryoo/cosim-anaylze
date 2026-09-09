@@ -57,7 +57,6 @@ class VisionTrainerWorker(QObject):
         except Exception as e:
             self.error.emit(str(e))
 
-
 class MoEWorker(QObject):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)

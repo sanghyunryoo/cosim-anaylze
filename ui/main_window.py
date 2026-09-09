@@ -29,6 +29,7 @@ from ui.dialogs.moe_manual_dialog import MoEManualDialog
 from ui.dialogs.homing_train_dialog import HomingTrainDialog
 from ui.dialogs.ctbc_train_dialog import CtbcTrainDialog
 from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker, CtbcWorker
+from core.smooth_onnx_exporter import export_smoothed_onnx
 from PyQt5.QtWidgets import QSizePolicy
 from envs.initial_pose import get_default_initial_pose, get_initial_pose_joint_names
 
@@ -1435,6 +1436,52 @@ class MainWindow(QMainWindow):
             "selected_joints": list(default_selected),
         }
 
+    def _humanoid_reference_motion_dir(self):
+        return os.path.join(self._repo_root(), "envs", "humanoid_light_v2", "reference_motion")
+
+    @staticmethod
+    def _humanoid_reference_policy_path():
+        return (
+            "/home/sanghyunryoo/Documents/4w4l/Isaac-RL-Two-wheel-Legged-Bot_joint/"
+            "logs/co_rl/Humanoid_Light_Flat_Reference_Motion/ppo/2026-09-09_02-09-02/"
+            "exported/policy.onnx"
+        )
+
+    def _is_humanoid_reference_inference(self):
+        return (
+            hasattr(self, "reference_inference_cb")
+            and self.env_id_cb.currentText() == "humanoid_light_v2"
+            and self.reference_inference_cb.currentText() == "Reference Imitation"
+        )
+
+    def _update_reference_motion_duration(self):
+        if not self._is_humanoid_reference_inference() or not hasattr(self, "reference_motion_cb"):
+            return
+        path = os.path.join(self._humanoid_reference_motion_dir(), self.reference_motion_cb.currentText())
+        try:
+            with np.load(path, allow_pickle=False) as motion:
+                duration = int(motion["base_frame_pos"].shape[0]) / float(np.asarray(motion["fps"]).item())
+            self.max_duration_le.setText(f"{duration:.6f}")
+        except Exception:
+            pass
+
+    def _update_reference_inference_ui(self):
+        if not hasattr(self, "reference_inference_cb"):
+            return
+        humanoid_selected = self.env_id_cb.currentText() == "humanoid_light_v2"
+        reference_selected = humanoid_selected and self.reference_inference_cb.currentText() == "Reference Imitation"
+        self.reference_inference_cb.setEnabled(humanoid_selected)
+        self.reference_motion_cb.setEnabled(reference_selected)
+        self.reference_reset_noise_cb.setEnabled(reference_selected)
+        self.reference_policy_note.setVisible(reference_selected)
+        if reference_selected:
+            reference_policy = self._humanoid_reference_policy_path()
+            if os.path.isfile(reference_policy):
+                self.policy_file_le.setText(reference_policy)
+            self.sensor_noise_cb.setCurrentText("none")
+            self.init_noise_slider.setValue(0)
+            self._update_reference_motion_duration()
+
     def _default_height_map_frame_body(self, env_id: str):
         _ = env_id
         return "base_link"
@@ -1901,6 +1948,7 @@ class MainWindow(QMainWindow):
         self._sync_vision_train_controls_from_cache()
         if self.vision_train_dialog is not None and self.vision_train_dialog.isVisible():
             self._refresh_vision_train_dialog()
+        self._update_reference_inference_ui()
 
     def _sync_height_map_inference_button(self):
         path = str(self.dataset_height_map_settings.get("inference_onnx_path", "")).strip()
@@ -2149,6 +2197,7 @@ class MainWindow(QMainWindow):
         top_h_layout.addLayout(right_v_layout, 2)
         self._create_command_settings_group(right_v_layout)
         self._create_fine_tune_group(right_v_layout)
+        self._create_smooth_policy_group(right_v_layout)
         self._setup_key_visual_buttons(right_v_layout)
 
         # Far right: Terminal Log
@@ -2243,8 +2292,38 @@ class MainWindow(QMainWindow):
         self.env_id_cb.setCurrentText(default_env)
         env_layout.addRow("ID:", self.env_id_cb)
 
+        self.reference_inference_cb = NoWheelComboBox()
+        self.reference_inference_cb.addItems(["Locomotion", "Reference Imitation"])
+        self.reference_inference_cb.setToolTip(
+            "Reference Imitation reproduces the Isaac Humanoid Light 276-D reference-policy input."
+        )
+        env_layout.addRow("Humanoid Mode:", self.reference_inference_cb)
+
+        self.reference_motion_cb = NoWheelComboBox()
+        motion_dir = self._humanoid_reference_motion_dir()
+        if os.path.isdir(motion_dir):
+            self.reference_motion_cb.addItems(
+                sorted(filename for filename in os.listdir(motion_dir) if filename.endswith(".npz"))
+            )
+        if self.reference_motion_cb.findText("82_82_08_poses_keypoints_settle5s_retargeted.npz") >= 0:
+            self.reference_motion_cb.setCurrentText("82_82_08_poses_keypoints_settle5s_retargeted.npz")
+        self.reference_motion_cb.setToolTip("Reference clip used for reset, phase, and the 182-D target term.")
+        env_layout.addRow("Reference Motion:", self.reference_motion_cb)
+
+        self.reference_reset_noise_cb = QCheckBox("Isaac reset perturbation")
+        self.reference_reset_noise_cb.setToolTip("Apply Isaac training reset noise: root XY and joints ±0.02.")
+        env_layout.addRow("Reference Reset:", self.reference_reset_noise_cb)
+
+        self.reference_policy_note = QLabel("Uses the supplied Humanoid Light reference ONNX (276 → 26).")
+        self.reference_policy_note.setStyleSheet("color: #64748B;")
+        self.reference_policy_note.setWordWrap(True)
+        env_layout.addRow("Reference Policy:", self.reference_policy_note)
+
         self.max_duration_le = QLineEdit("120.0")
         env_layout.addRow("Max Duration (s):", self.max_duration_le)
+
+        self.reference_inference_cb.currentTextChanged.connect(self._update_reference_inference_ui)
+        self.reference_motion_cb.currentTextChanged.connect(self._update_reference_motion_duration)
 
         actuator_btn = QPushButton("Actuator Settings")
         actuator_btn.clicked.connect(self.open_actuator_settings)
@@ -2593,6 +2672,34 @@ class MainWindow(QMainWindow):
         fine_layout.addRow("Status:", self.fine_tune_status_label)
 
         parent_layout.addWidget(fine_tune_group)
+
+    def _create_smooth_policy_group(self, parent_layout):
+        smooth_group = QGroupBox("Smooth ONNX")
+        smooth_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 5px; margin-top: 10px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }"
+        )
+        smooth_layout = QVBoxLayout(smooth_group)
+        smooth_layout.setSpacing(6)
+        self.smooth_alpha_sb = QDoubleSpinBox()
+        self.smooth_alpha_sb.setRange(0.001, 1.0)
+        self.smooth_alpha_sb.setDecimals(3)
+        self.smooth_alpha_sb.setSingleStep(0.05)
+        self.smooth_alpha_sb.setValue(0.7)
+        self.smooth_alpha_sb.setToolTip("Weight of the new source-policy action. Smaller values smooth more strongly.")
+        smooth_layout.addWidget(QLabel("New-action alpha:"))
+        smooth_layout.addWidget(self.smooth_alpha_sb)
+        self.smooth_policy_btn = QPushButton("Export Smoothed ONNX")
+        self.smooth_policy_btn.setToolTip(
+            "Export a same-input/output ONNX with exact EMA action smoothing from the existing last_action observation. "
+            "No policy training is performed."
+        )
+        self.smooth_policy_btn.clicked.connect(self.export_smoothed_onnx)
+        smooth_layout.addWidget(self.smooth_policy_btn)
+        self.smooth_policy_status_label = QLabel("No training. Uses the previous action already present in the observation.")
+        self.smooth_policy_status_label.setWordWrap(True)
+        smooth_layout.addWidget(self.smooth_policy_status_label)
+        parent_layout.addWidget(smooth_group)
 
     def _create_vision_train_group(self, parent_layout):
         vision_group = QGroupBox("Vision Train")
@@ -3039,6 +3146,48 @@ class MainWindow(QMainWindow):
             return
         self._update_fine_tune_status_label()
         QMessageBox.information(self, "Fine-tune", f"Merged ONNX exported to:\n{exported}")
+
+    def export_smoothed_onnx(self):
+        if self.thread is not None and self.thread.isRunning():
+            QMessageBox.warning(self, "Smooth ONNX", "Stop the active test before exporting a smoothed policy.")
+            return
+
+        policy_path = self.policy_file_le.text().strip()
+        if not policy_path or not os.path.isfile(policy_path):
+            QMessageBox.warning(self, "Smooth ONNX", "Select a valid source ONNX policy first.")
+            return
+        if self.policy_type_cb.currentText().strip().lower() == "encoder+mlp":
+            QMessageBox.warning(
+                self,
+                "Smooth ONNX",
+                "This exporter supports a single ONNX observation input. "
+                "Encoder+MLP policies should be exported as a single policy first.",
+            )
+            return
+
+        config = self._gather_config()
+        if config is None:
+            return
+        base_path, _ = os.path.splitext(os.path.abspath(policy_path))
+        output_path = base_path + "_smoothed.onnx"
+        alpha = float(self.smooth_alpha_sb.value())
+        try:
+            summary = export_smoothed_onnx(policy_path, config, alpha, output_path)
+        except Exception as exc:
+            self.smooth_policy_status_label.setText("Export failed")
+            QMessageBox.critical(self, "Smooth ONNX", str(exc))
+            return
+        self.smooth_policy_status_label.setText(
+            f"Exported exact EMA (alpha={alpha:.3f}); verification error {summary['verification_max_abs_error']:.2e}."
+        )
+        self.status_label.setText("Smoothed ONNX exported")
+        QMessageBox.information(
+            self,
+            "Smooth ONNX",
+            "No-training smooth ONNX exported and numerically verified.\n\n"
+            f"ONNX: {summary['onnx_path']}\n"
+            f"Manifest: {summary['manifest_path']}",
+        )
 
     def _update_vision_train_status_label(self):
         settings = self.vision_train_settings if self.vision_train_settings else self._collect_vision_train_ui_settings()
@@ -4349,6 +4498,21 @@ class MainWindow(QMainWindow):
 
             fine_tune_cfg = self._collect_fine_tune_ui_settings()
 
+            reference_enabled = self._is_humanoid_reference_inference()
+            reference_motion_cfg = {"enabled": False}
+            if reference_enabled:
+                motion_name = self.reference_motion_cb.currentText().strip()
+                motion_path = os.path.join(self._humanoid_reference_motion_dir(), motion_name)
+                if not motion_name or not os.path.isfile(motion_path):
+                    raise RuntimeError("Select a valid Humanoid Light reference motion.")
+                reference_motion_cfg = {
+                    "enabled": True,
+                    "directory": self._humanoid_reference_motion_dir(),
+                    "motion": motion_name,
+                    "reset_perturbation": bool(self.reference_reset_noise_cb.isChecked()),
+                    "fall_height": 0.35,
+                }
+
             config = {
                 "env": {
                     "id": env_id,
@@ -4372,15 +4536,15 @@ class MainWindow(QMainWindow):
                 },
                 "random": {
                     "precision": self.precision_cb.currentText(),
-                    "sensor_noise": self.sensor_noise_cb.currentText(),
-                    "init_noise": self.init_noise_slider.value() / 100.0,
-                    "sliding_friction": self.sliding_friction_slider.value() / 100.0,
-                    "torsional_friction": self.torsional_friction_slider.value() / 100.0,
-                    "rolling_friction": self.rolling_friction_slider.value() / 100.0,
-                    "friction_loss": self.friction_loss_slider.value() / 100.0,
-                    "action_delay_prob": self.action_delay_prob_slider.value() / 100.0,
-                    "mass_noise": self.mass_noise_slider.value() / 100.0,
-                    "load": self.load_slider.value() / 10.0
+                    "sensor_noise": "none" if reference_enabled else self.sensor_noise_cb.currentText(),
+                    "init_noise": 0.0 if reference_enabled else self.init_noise_slider.value() / 100.0,
+                    "sliding_friction": 1.0 if reference_enabled else self.sliding_friction_slider.value() / 100.0,
+                    "torsional_friction": 0.005 if reference_enabled else self.torsional_friction_slider.value() / 100.0,
+                    "rolling_friction": 0.0001 if reference_enabled else self.rolling_friction_slider.value() / 100.0,
+                    "friction_loss": 0.0 if reference_enabled else self.friction_loss_slider.value() / 100.0,
+                    "action_delay_prob": 0.0 if reference_enabled else self.action_delay_prob_slider.value() / 100.0,
+                    "mass_noise": 0.0 if reference_enabled else self.mass_noise_slider.value() / 100.0,
+                    "load": 0.0 if reference_enabled else self.load_slider.value() / 10.0
                 },
                 "action_scales": action_scales,
                 "action_clippings": action_clippings,
@@ -4388,6 +4552,7 @@ class MainWindow(QMainWindow):
                 "hardware": hardware_numeric,
                 "initial_positions": initial_positions,
                 "joint_offsets": initial_positions,
+                "reference_motion": reference_motion_cfg,
                 "monitoring": {
                     "selected_joints": list(self.monitor_settings.get("selected_joints", [])),
                     "depth_enabled": bool(self.depth_window_toggle_cb.isChecked()) or inference_visualize,

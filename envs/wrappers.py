@@ -5,6 +5,8 @@ from typing import (Tuple, SupportsFloat)
 import numpy as np
 import mujoco
 
+from envs.humanoid_light_v2.reference_motion_loader import HumanoidLightReferenceMotion
+
 try:
     from prettytable import PrettyTable
 except Exception:
@@ -515,6 +517,194 @@ class TimeLimitWrapper(BaseEnv):
 
     def close(self):
         self.env.close()
+
+
+class ReferenceMotionResetWrapper(BaseEnv):
+    """Apply an Isaac-reference frame before the state stack is constructed.
+
+    This wrapper intentionally sits directly above ``HumanoidLightV2``.  A
+    reset performed outside that position would leave StateBuildWrapper's first
+    90-D proprioception frame describing the generic standing pose instead of
+    reference frame zero.
+    """
+
+    def __init__(self, env, motion: HumanoidLightReferenceMotion, config):
+        super().__init__()
+        self.env = env
+        self.motion = motion
+        self.config = config
+        self.id = env.id
+        self.action_dim = env.action_dim
+        self.control_freq = env.control_freq
+        self.obs_to_dim = env.obs_to_dim
+        self.joint_names_in_order = list(env.joint_names_in_order)
+        self._q_indices = np.asarray(env.q_indices, dtype=np.int64)
+        self._qd_indices = np.asarray(env.qd_indices, dtype=np.int64)
+        self._joint_ranges = self._controlled_joint_ranges()
+        # The Isaac asset used for training declares
+        # ``soft_joint_pos_limit_factor=0.9``.  Its reference-reset event
+        # clamps into those soft limits, rather than the raw hard limits.
+        range_center = 0.5 * (self._joint_ranges[:, 0] + self._joint_ranges[:, 1])
+        range_half_width = 0.45 * (self._joint_ranges[:, 1] - self._joint_ranges[:, 0])
+        self._soft_joint_ranges = np.stack((range_center - range_half_width, range_center + range_half_width), axis=-1)
+
+    def _controlled_joint_ranges(self):
+        ranges = np.empty((self.action_dim, 2), dtype=np.float64)
+        for index, name in enumerate(self.env.joint_names_in_order):
+            joint_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if joint_id < 0:
+                raise ValueError(f"Controlled joint not found in MuJoCo model: {name}")
+            ranges[index] = self.env.model.jnt_range[joint_id]
+        return ranges
+
+    def _reset_noise(self):
+        ref_cfg = self.config.get("reference_motion", {}) or {}
+        if not bool(ref_cfg.get("reset_perturbation", False)):
+            return np.zeros(2, dtype=np.float64), np.zeros(self.action_dim, dtype=np.float64)
+        root_xy = np.random.uniform(-0.02, 0.02, size=2)
+        joint_pos = np.random.uniform(-0.02, 0.02, size=self.action_dim)
+        return root_xy, joint_pos
+
+    def reset(self):
+        # The wrapped leaf reset clears action delay/filter state and all MuJoCo
+        # derived buffers.  Replace only its initial physical state afterwards.
+        _, _ = self.env.reset()
+        ref = self.motion.frame(0)
+        root_xy_noise, joint_noise = self._reset_noise()
+
+        data = self.env.get_data()
+        data.qpos[0:2] = root_xy_noise
+        data.qpos[2] = float(ref["root_pos"][2])
+        data.qpos[3:7] = ref["root_quat_wxyz"]
+        # Match Isaac's reset_to_reference_motion(), which clamps into the
+        # asset's 0.9 soft joint limits after applying optional reset noise.
+        joint_pos = np.clip(
+            ref["dof_pos"] + joint_noise,
+            self._soft_joint_ranges[:, 0],
+            self._soft_joint_ranges[:, 1],
+        )
+        data.qpos[self._q_indices] = joint_pos
+
+        data.qvel[:] = 0.0
+        data.qvel[0:3] = ref["root_lin_vel"]
+        data.qvel[self._qd_indices] = ref["dof_vel"]
+        mujoco.mj_forward(self.env.model, data)
+
+        return self.env._get_obs(), self.env._get_reset_info()
+
+    def step(self, action: np.ndarray):
+        return self.env.step(action)
+
+    def event(self, event: str, value):
+        return self.env.event(event, value)
+
+    def get_data(self):
+        return self.env.get_data()
+
+    def render(self):
+        return self.env.render()
+
+    def close(self):
+        return self.env.close()
+
+
+class ReferenceMotionTargetWrapper(BaseEnv):
+    """Append Isaac's 182-D non-stack reference target to a 94-D state."""
+
+    def __init__(self, env, motion: HumanoidLightReferenceMotion, control_freq: float, config):
+        super().__init__()
+        self.env = env
+        self.motion = motion
+        self.config = config
+        self.id = env.id
+        self.action_dim = env.action_dim
+        self.control_freq = float(control_freq)
+        self.control_dt = 1.0 / self.control_freq
+        self.state_dim = env.state_dim + 182
+        self.control_step = 0
+        self.reset_flag = False
+        self._fall_height = float((config.get("reference_motion", {}) or {}).get("fall_height", 0.35))
+
+    def _state_with_reference(self, state):
+        target = self.motion.policy_targets(self.control_step, self.control_dt)
+        combined = np.concatenate((np.asarray(state, dtype=np.float32), target), dtype=np.float32)
+        if combined.shape != (self.state_dim,):
+            raise RuntimeError(
+                f"Humanoid Light reference observation mismatch: got {combined.shape[0]}, expected {self.state_dim}."
+            )
+        return combined
+
+    def _zero_command(self):
+        if hasattr(self.env, "receive_user_command"):
+            self.env.receive_user_command(np.zeros(4, dtype=np.float64))
+
+    def _add_tracking_info(self, info):
+        ref = self.motion.frame(self.motion.frame_id(self.control_step, self.control_dt))
+        data = self.get_data()
+        leaf = self._leaf_env()
+        actual_dof = data.qpos[np.asarray(leaf.q_indices, dtype=np.int64)]
+        actual_quat = np.asarray(data.qpos[3:7], dtype=np.float64)
+        quat_dot = float(np.clip(abs(np.dot(actual_quat, ref["root_quat_wxyz"])), 0.0, 1.0))
+        root_orientation_error = float(2.0 * np.arccos(quat_dot))
+        root_vel = np.asarray(data.qvel[0:3], dtype=np.float64)
+
+        info["reference_frame"] = int(ref["frame_id"])
+        info["reference_joint_pos_rmse"] = float(np.sqrt(np.mean(np.square(actual_dof - ref["dof_pos"]))))
+        info["reference_root_height_error"] = float(data.qpos[2] - ref["root_pos"][2])
+        info["reference_root_orientation_error_rad"] = root_orientation_error
+        info["reference_root_lin_vel_rmse"] = float(np.sqrt(np.mean(np.square(root_vel - ref["root_lin_vel"]))))
+        info["reference_stable"] = bool(np.isfinite(data.qpos).all() and data.qpos[2] >= self._fall_height)
+        return info
+
+    def _leaf_env(self):
+        env = self.env
+        while hasattr(env, "env"):
+            env = env.env
+        return env
+
+    def reset(self):
+        self.control_step = 0
+        self.reset_flag = True
+        self._zero_command()
+        state, info = self.env.reset()
+        info = self._add_tracking_info(dict(info))
+        return self._state_with_reference(state), info
+
+    def step(self, action: np.ndarray):
+        assert self.reset_flag, "Call 'reset()' before calling 'step()'."
+        self._zero_command()
+        state, terminated, truncated, info = self.env.step(action)
+        self.control_step += 1
+        info = self._add_tracking_info(dict(info))
+        # Unlike the generic humanoid environment, reference inference needs a
+        # meaningful early stop when the free base has fallen below the floor.
+        if not info["reference_stable"]:
+            terminated = True
+        if terminated or truncated:
+            self.reset_flag = False
+        return self._state_with_reference(state), terminated, truncated, info
+
+    def receive_user_command(self, _user_command):
+        # Reference PPO retained the four command slots for compatibility, but
+        # trained with all of them fixed to zero.
+        self._zero_command()
+
+    def event(self, event: str, value):
+        return self.env.event(event, value)
+
+    def get_data(self):
+        return self.env.get_data()
+
+    def get_last_obs(self):
+        if hasattr(self.env, "get_last_obs"):
+            return self.env.get_last_obs()
+        return None
+
+    def render(self):
+        return self.env.render()
+
+    def close(self):
+        return self.env.close()
 
 
 class CommandWrapper(BaseEnv):

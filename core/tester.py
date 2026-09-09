@@ -266,6 +266,16 @@ class Tester(QObject):
             policy_path=os.path.join(self.policy_path),
             encoder_path=self.encoder_path if hasattr(self, 'encoder_path') else None,
         )
+        # Reference imitation is a strict sim-to-sim replay of the exported
+        # Isaac policy.  Do not let the optional local residual fine-tune
+        # wrapper (including a previously configured manual bias) alter its
+        # actions.  build_policy() wraps every policy by default, so unwrap
+        # the original single-file MLP here.
+        reference_cfg = self.config.get("reference_motion", {}) or {}
+        if bool(reference_cfg.get("enabled", False)):
+            base_policy = getattr(self.policy, "base_policy", None)
+            if base_policy is not None:
+                self.policy = base_policy
         self._apply_pending_policy_controls()
         self.env = build_env(self.config)
         self._init_depth_stream()
@@ -276,6 +286,7 @@ class Tester(QObject):
         self._monitor_history = {joint_name: deque(maxlen=self._monitor_history_len) for joint_name in self._monitor_joint_names}
         self._monitor_session_history = {joint_name: [] for joint_name in self._monitor_joint_names}
         state, info = self.env.reset()
+        self._validate_reference_policy_contract(state)
         self._update_height_map_visualization()
         self.env.render()
         self._emit_overlay_payload()
@@ -324,6 +335,27 @@ class Tester(QObject):
         self.alphaUpdated.emit({})
         self.close()
         self.finished.emit()
+
+    def _validate_reference_policy_contract(self, state):
+        """Fail before simulation when a non-reference ONNX is selected."""
+
+        reference_cfg = self.config.get("reference_motion", {}) or {}
+        if not bool(reference_cfg.get("enabled", False)):
+            return
+        if self.config.get("policy", {}).get("policy_type", "MLP").strip().lower() != "mlp":
+            raise RuntimeError("Humanoid Light reference inference requires the exported single-input MLP ONNX policy.")
+        if np.asarray(state).shape != (276,):
+            raise RuntimeError(f"Humanoid Light reference observation must be 276-D, got {np.asarray(state).shape}.")
+        session = getattr(self.policy, "ort_session", None)
+        if session is None:
+            raise RuntimeError("Humanoid Light reference inference requires an ONNX MLP policy session.")
+        input_shape = list(session.get_inputs()[0].shape)
+        output_shape = list(session.get_outputs()[0].shape)
+        if input_shape[-1] != 276 or output_shape[-1] != 26:
+            raise RuntimeError(
+                "Selected ONNX does not match Humanoid Light reference policy contract: "
+                f"expected [*, 276] -> [*, 26], got {input_shape} -> {output_shape}."
+            )
 
     def stop(self):
         self._stop = True
