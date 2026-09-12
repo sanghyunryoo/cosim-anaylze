@@ -72,6 +72,36 @@ def resolve_reference_motion(motion: str | Path | None, reference_dir: str | Pat
     raise FileNotFoundError(f"Reference motion not found: {motion!s}. Available bundled clips: {available}")
 
 
+class ReferencePhaseClock:
+    """Minimal NPZ clock used by locomotion's user-configured phase input.
+
+    This intentionally reads only the clip timeline.  A normal locomotion
+    rollout does not need reference reset/target data or a selected
+    ``reference_motion`` mode to provide the one phase observation.
+    """
+
+    def __init__(self, motion_path: str | Path):
+        self.motion_path = Path(motion_path).expanduser().resolve()
+        if not self.motion_path.is_file():
+            raise FileNotFoundError(f"Reference progress source NPZ not found: {self.motion_path}")
+        try:
+            with np.load(self.motion_path, allow_pickle=False) as motion:
+                self.num_frames = int(np.asarray(motion["base_frame_pos"]).shape[0])
+                self.fps = float(np.asarray(motion["fps"]).item())
+        except Exception as exc:
+            raise ValueError(f"Could not read reference progress source '{self.motion_path}': {exc}") from exc
+        if self.num_frames < 1 or self.fps <= 0.0:
+            raise ValueError(
+                f"Reference progress source has invalid frame/fps values: frames={self.num_frames}, fps={self.fps}."
+            )
+        self.duration_s = self.num_frames / self.fps
+
+    def trajectory_progress(self, control_step: int, control_dt: float) -> np.ndarray:
+        num_control_steps = max(1, int(np.floor(self.duration_s / float(control_dt) + 1.0e-6)))
+        progress = min(max(int(control_step), 0), num_control_steps - 1) / max(num_control_steps - 1, 1)
+        return np.asarray((progress,), dtype=np.float32)
+
+
 class HumanoidLightReferenceMotion:
     """A single retargeted clip in the requested simulator joint order."""
 
@@ -135,8 +165,12 @@ class HumanoidLightReferenceMotion:
     def frame_id(self, control_step: int, control_dt: float) -> int:
         """Return Isaac's clamped frame id for an environment control tick."""
 
-        elapsed = float(control_step) * float(control_dt)
-        return int(np.clip(np.floor(elapsed / self.dt), 0, self.num_frames - 1))
+        # At 50 Hz, decimal binary round-off can make ``29 * .02 / .02``
+        # infinitesimally smaller than 29 and incorrectly repeat frame 28.
+        # Preserve the intended floor rule for unequal rates while removing
+        # only that numerical artefact.
+        tick_ratio = (float(control_step) * float(control_dt)) / self.dt
+        return int(np.clip(np.floor(tick_ratio + 1.0e-6), 0, self.num_frames - 1))
 
     def frame(self, frame_id: int) -> dict[str, np.ndarray]:
         frame_id = int(np.clip(frame_id, 0, self.num_frames - 1))
@@ -153,6 +187,18 @@ class HumanoidLightReferenceMotion:
         """Build Isaac's 180 target values plus two clamped phase values."""
 
         current_frame = self.frame_id(control_step, control_dt)
+        return self.policy_targets_for_frame(current_frame)
+
+    def policy_targets_for_frame(self, current_frame: int) -> np.ndarray:
+        """Build the 182-D target for a known clamped NPZ frame id.
+
+        This is kept separate from the student's control-clock progress:
+        the teacher phase is an NPZ-frame phase, whereas the student must also
+        distinguish individual controller ticks when source/control rates
+        differ.
+        """
+
+        current_frame = int(np.clip(current_frame, 0, self.num_frames - 1))
         targets: list[np.ndarray] = []
         for offset in FUTURE_FRAME_OFFSETS:
             ref = self.frame(current_frame + offset)
@@ -173,3 +219,15 @@ class HumanoidLightReferenceMotion:
         phase = current_frame / max(self.num_frames - 1, 1)
         targets.append(np.asarray((np.sin(2.0 * np.pi * phase), np.cos(2.0 * np.pi * phase)), dtype=np.float32))
         return np.concatenate(targets, dtype=np.float32)
+
+    def trajectory_progress(self, control_step: int, control_dt: float) -> np.ndarray:
+        """Return the one-value phase coordinate for a distilled student.
+
+        The non-looping normalized progress is indexed by control tick rather
+        than NPZ frame.  Two controller ticks can therefore remain distinct
+        even when a low-rate source clip maps both ticks to the same frame.
+        """
+
+        num_control_steps = max(1, int(np.floor(self.duration_s / float(control_dt) + 1.0e-6)))
+        progress = min(max(int(control_step), 0), num_control_steps - 1) / max(num_control_steps - 1, 1)
+        return np.asarray((progress,), dtype=np.float32)

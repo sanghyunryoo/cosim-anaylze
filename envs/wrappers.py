@@ -5,7 +5,10 @@ from typing import (Tuple, SupportsFloat)
 import numpy as np
 import mujoco
 
-from envs.humanoid_light_v2.reference_motion_loader import HumanoidLightReferenceMotion
+from envs.humanoid_light_v2.reference_motion_loader import (
+    HumanoidLightReferenceMotion,
+    ReferencePhaseClock,
+)
 
 try:
     from prettytable import PrettyTable
@@ -120,9 +123,39 @@ class StateBuildWrapper(BaseEnv):
         # Ordered observation keys that will NOT be stacked (single-frame)
         self.non_stacked_obs_order = list(self.settings_cfg["non_stacked_obs_order"])
 
-        # Cache dimensions   
-        self._stacked_obs_dim = sum(self.env.obs_to_dim[n] for n in self.stacked_obs_order)
-        self._non_stacked_obs_dim = sum(self.env.obs_to_dim[n] for n in self.non_stacked_obs_order)
+        # ``reference_progress`` is a synthetic one-dimensional observation.
+        # It intentionally lives in the regular observation builder (rather
+        # than CommandWrapper) so reference progress can be added through the
+        # same observation settings UI as ordinary locomotion inputs.
+        self.obs_to_dim = dict(self.env.obs_to_dim)
+        has_reference_progress = "reference_progress" in (
+            self.stacked_obs_order + self.non_stacked_obs_order
+        )
+        self._reference_phase_clock = None
+        if has_reference_progress:
+            if "reference_progress" in self.stacked_obs_order:
+                raise ValueError("'reference_progress' is available only as a Non-Stacked Observation.")
+            if self.non_stacked_obs_order.count("reference_progress") != 1:
+                raise ValueError("Add 'reference_progress' exactly once to Non-Stacked Observation.")
+            progress_cfg = self.settings_cfg.get("reference_progress") or {}
+            if int(progress_cfg.get("freq", 0)) != int(round(self.control_freq)) or not np.isclose(
+                float(progress_cfg.get("scale", float("nan"))), 1.0
+            ):
+                raise ValueError(
+                    "'reference_progress' must use the control frequency and scale=1.0 "
+                    f"(expected {int(round(self.control_freq))} Hz)."
+                )
+            phase_source = str(self.settings_cfg.get("reference_progress_source", "")).strip()
+            if not phase_source:
+                raise ValueError(
+                    "Set Reference Progress Source (.npz) in Observation Settings when using 'reference_progress'."
+                )
+            self._reference_phase_clock = ReferencePhaseClock(phase_source)
+            self.obs_to_dim["reference_progress"] = 1
+
+        # Cache dimensions
+        self._stacked_obs_dim = sum(self.obs_to_dim[n] for n in self.stacked_obs_order)
+        self._non_stacked_obs_dim = sum(self.obs_to_dim[n] for n in self.non_stacked_obs_order)
         self.state_dim = self.stack_size * self._stacked_obs_dim + self._non_stacked_obs_dim
   
         # Rolling buffer for stacked observations (shape: [stack_size, stacked_obs_dim])
@@ -364,10 +397,14 @@ class StateBuildWrapper(BaseEnv):
             need_update = (self.sim_step == 0) or (self.sim_step % update_interval == 0)
 
             if need_update or (n not in self._freq_cache):
-                if n in obs and obs[n] is not None:
+                if n == "reference_progress":
+                    val = self._reference_phase_clock.trajectory_progress(
+                        self.sim_step, 1.0 / self.control_freq
+                    ) * scale
+                elif n in obs and obs[n] is not None:
                     val = np.asarray(obs[n], dtype=np.float32) * scale
                 else:
-                    val = np.zeros((int(self.env.obs_to_dim.get(n, 0)),), dtype=np.float32)
+                    val = np.zeros((int(self.obs_to_dim.get(n, 0)),), dtype=np.float32)
                 self._freq_cache[n] = val
 
             parts.append(self._freq_cache[n].ravel().astype(np.float32))
@@ -520,12 +557,12 @@ class TimeLimitWrapper(BaseEnv):
 
 
 class ReferenceMotionResetWrapper(BaseEnv):
-    """Apply an Isaac-reference frame before the state stack is constructed.
+    """Preserve the configured physical reset pose for reference inference.
 
-    This wrapper intentionally sits directly above ``HumanoidLightV2``.  A
-    reset performed outside that position would leave StateBuildWrapper's first
-    90-D proprioception frame describing the generic standing pose instead of
-    reference frame zero.
+    This wrapper intentionally sits directly above ``HumanoidLightV2`` so the
+    first StateBuildWrapper frame reflects the exact Initial Pose Settings.
+    Reference q/dq and root targets remain part of the policy observation, but
+    never teleport the simulated robot away from its configured start state.
     """
 
     def __init__(self, env, motion: HumanoidLightReferenceMotion, config):
@@ -539,7 +576,6 @@ class ReferenceMotionResetWrapper(BaseEnv):
         self.obs_to_dim = env.obs_to_dim
         self.joint_names_in_order = list(env.joint_names_in_order)
         self._q_indices = np.asarray(env.q_indices, dtype=np.int64)
-        self._qd_indices = np.asarray(env.qd_indices, dtype=np.int64)
         self._joint_ranges = self._controlled_joint_ranges()
         # The Isaac asset used for training declares
         # ``soft_joint_pos_limit_factor=0.9``.  Its reference-reset event
@@ -567,27 +603,28 @@ class ReferenceMotionResetWrapper(BaseEnv):
 
     def reset(self):
         # The wrapped leaf reset clears action delay/filter state and all MuJoCo
-        # derived buffers.  Replace only its initial physical state afterwards.
+        # derived buffers, then applies Initial Pose Settings. Keep that full
+        # qpos/qvel state: a real robot cannot be teleported to reference frame
+        # zero before executing its first policy action.
         _, _ = self.env.reset()
-        ref = self.motion.frame(0)
         root_xy_noise, joint_noise = self._reset_noise()
 
         data = self.env.get_data()
-        data.qpos[0:2] = root_xy_noise
-        data.qpos[2] = float(ref["root_pos"][2])
-        data.qpos[3:7] = ref["root_quat_wxyz"]
-        # Match Isaac's reset_to_reference_motion(), which clamps into the
-        # asset's 0.9 soft joint limits after applying optional reset noise.
-        joint_pos = np.clip(
-            ref["dof_pos"] + joint_noise,
-            self._soft_joint_ranges[:, 0],
-            self._soft_joint_ranges[:, 1],
-        )
-        data.qpos[self._q_indices] = joint_pos
+        initial_qpos = np.asarray(data.qpos, dtype=np.float64).copy()
+        initial_qvel = np.asarray(data.qvel, dtype=np.float64).copy()
 
-        data.qvel[:] = 0.0
-        data.qvel[0:3] = ref["root_lin_vel"]
-        data.qvel[self._qd_indices] = ref["dof_vel"]
+        # The opt-in reference reset perturbation remains useful for stress
+        # tests. With it off (the GUI default), qpos and qvel are bit-for-bit
+        # the values configured in Initial Pose Settings.
+        data.qpos[0:2] = root_xy_noise
+        data.qpos[2:] = initial_qpos[2:]
+        if np.any(joint_noise):
+            data.qpos[self._q_indices] = np.clip(
+                initial_qpos[self._q_indices] + joint_noise,
+                self._soft_joint_ranges[:, 0],
+                self._soft_joint_ranges[:, 1],
+            )
+        data.qvel[:] = initial_qvel
         mujoco.mj_forward(self.env.model, data)
 
         return self.env._get_obs(), self.env._get_reset_info()
@@ -707,6 +744,108 @@ class ReferenceMotionTargetWrapper(BaseEnv):
         return self.env.close()
 
 
+class ReferenceMotionProgressWrapper(ReferenceMotionTargetWrapper):
+    """Track a reference clip while progress is built as a normal observation.
+
+    ``StateBuildWrapper`` owns the synthetic ``reference_progress`` item.  In
+    particular, the distilled student uses CommandWrapper with command_dim=0:
+    its contract is the standard 90-D locomotion observation followed by this
+    one progress coordinate (91-D total).
+    """
+
+    def __init__(self, env, motion: HumanoidLightReferenceMotion, control_freq: float, config):
+        super().__init__(env, motion, control_freq, config)
+        self.state_dim = env.state_dim
+        if self.state_dim != 91:
+            raise RuntimeError(
+                "Distilled reference trajectory requires the 90-D locomotion observation plus "
+                f"the final 1-D Reference Progress observation (91-D total); got {self.state_dim}-D."
+            )
+        settings_cfg = config.get("settings", config.get("observation", {})) or {}
+        stacked = list(settings_cfg.get("stacked_obs_order", []) or [])
+        non_stacked = list(settings_cfg.get("non_stacked_obs_order", []) or [])
+        progress_cfg = settings_cfg.get("reference_progress") or {}
+        if (
+            int(settings_cfg.get("command_dim", -1)) != 0
+            or
+            "reference_progress" in stacked
+            or non_stacked.count("reference_progress") != 1
+            or not non_stacked
+            or non_stacked[-1] != "reference_progress"
+            or int(progress_cfg.get("freq", 0)) != int(round(self.control_freq))
+            or not np.isclose(float(progress_cfg.get("scale", float("nan"))), 1.0)
+        ):
+            raise RuntimeError(
+                "Distilled reference trajectory requires 'reference_progress' exactly once in "
+                f"Non-Stacked Observation as its final item, Command Dim=0, and "
+                f"freq={int(round(self.control_freq))} with scale=1.0."
+            )
+        # Keep the student-test terminal log concise enough to show whether
+        # simulation continues after the clip, without printing all 90-D
+        # proprioception every control tick.
+        self._clip_control_steps = max(1, int(np.floor(self.motion.duration_s / self.control_dt + 1.0e-6)))
+        self._command_log_interval_steps = max(1, int(round(self.control_freq / 2.0)))
+
+    def _condition(self, step: int) -> np.ndarray:
+        return self.motion.trajectory_progress(step, self.control_dt)
+
+    def _is_post_clip(self, step: int) -> bool:
+        return int(step) >= self._clip_control_steps
+
+    def _add_progress_info(self, info: dict, condition: np.ndarray) -> dict:
+        info["reference_progress"] = float(np.asarray(condition, dtype=np.float32).reshape(-1)[0])
+        info["reference_control_step"] = int(self.control_step)
+        info["reference_clip_control_steps"] = int(self._clip_control_steps)
+        info["reference_post_clip"] = self._is_post_clip(self.control_step)
+        return info
+
+    def _log_progress(self, condition: np.ndarray, force: bool = False, end_reason: str | None = None):
+        step = int(self.control_step)
+        enters_post_clip = step == self._clip_control_steps
+        if not force and step % self._command_log_interval_steps != 0 and not enters_post_clip:
+            return
+        phase = "post-clip (last condition held)" if self._is_post_clip(step) else "clip"
+        progress = float(np.asarray(condition, dtype=np.float64).reshape(-1)[0])
+        print(
+            f"[reference-student] step={step}/{self._clip_control_steps} "
+            f"t={step * self.control_dt:.2f}s phase={phase} "
+            f"progress={progress:.4f}"
+            + (f" end={end_reason}" if end_reason else "")
+        )
+
+    def reset(self):
+        self.control_step = 0
+        self.reset_flag = True
+        state, info = self.env.reset()
+        condition = self._condition(self.control_step)
+        info = self._add_tracking_info(dict(info))
+        info = self._add_progress_info(info, condition)
+        self._log_progress(condition, force=True)
+        return state, info
+
+    def step(self, action: np.ndarray):
+        assert self.reset_flag, "Call 'reset()' before calling 'step()'."
+        # StateBuildWrapper has already emitted the next reference-progress
+        # value for this state; advance our clock for logging/tracking only.
+        state, terminated, truncated, info = self.env.step(action)
+        self.control_step += 1
+        condition = self._condition(self.control_step)
+        info = self._add_tracking_info(dict(info))
+        if not info["reference_stable"]:
+            terminated = True
+        info = self._add_progress_info(info, condition)
+        end_reason = "fall" if not info["reference_stable"] else ("time-limit" if truncated else "terminated")
+        self._log_progress(condition, force=terminated or truncated, end_reason=end_reason if (terminated or truncated) else None)
+        if terminated or truncated:
+            self.reset_flag = False
+        return state, terminated, truncated, info
+
+    def receive_user_command(self, user_command):
+        """Forward normal command events; command_dim=0 makes them a no-op."""
+        if hasattr(self.env, "receive_user_command"):
+            self.env.receive_user_command(user_command)
+
+
 class CommandWrapper(BaseEnv):
     def __init__(self, env, config):
         super().__init__()
@@ -715,16 +854,20 @@ class CommandWrapper(BaseEnv):
         self.settings_cfg = self.config.get("settings", self.config.get("observation", {}))
         self.id = env.id
         self.action_dim = env.action_dim
-        self.command_dim = self.settings_cfg["command_dim"]
+        self.command_dim = int(self.settings_cfg["command_dim"])
+        if self.command_dim < 0:
+            raise ValueError(f"command_dim must be >= 0, got {self.command_dim}.")
         self.state_dim = env.state_dim + self.command_dim
-        self.user_command = np.zeros(self.settings_cfg["command_dim"])
-        self.applied_command = np.zeros(self.settings_cfg["command_dim"])
+        self.user_command = np.zeros(self.command_dim)
+        self.applied_command = np.zeros(self.command_dim)
         self.reset_flag = False       
-        assert self.command_dim > 0, "command_dim must be greater than 0."
 
     def receive_user_command(self, user_command):
+        if self.command_dim == 0:
+            return
+        user_command = np.asarray(user_command, dtype=np.float64).reshape(-1)
         self.user_command = user_command[:self.command_dim]
-        self.applied_command[:] = user_command
+        self.applied_command[:] = self.user_command
 
         if self.config["env"]["position_command"] is False:
             for i in range(self.command_dim):
@@ -761,15 +904,12 @@ class CommandWrapper(BaseEnv):
         next_state, terminated, truncated, info = self.env.step(action)
         next_state = np.concatenate((next_state, self.applied_command))
 
-        if self.command_dim == 2:
+        if self.command_dim >= 1:
             info["user_command_0"] = self.user_command[0]
+        if self.command_dim >= 2:
             info["user_command_1"] = self.user_command[1]
-        elif self.command_dim > 2:
-            info["user_command_0"] = self.user_command[0]
-            info["user_command_1"] = self.user_command[1]
+        if self.command_dim >= 3:
             info["user_command_2"] = self.user_command[2]
-        else:
-            raise ValueError(f"Invalid 'command_dim': expected 2  or >= 3; but got {self.command_dim}.")
 
         if terminated or truncated:
             self.reset_flag = False

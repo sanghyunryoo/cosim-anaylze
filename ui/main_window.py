@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 import yaml
@@ -28,10 +29,15 @@ from ui.dialogs.moe_train_dialog import MoETrainDialog
 from ui.dialogs.moe_manual_dialog import MoEManualDialog
 from ui.dialogs.homing_train_dialog import HomingTrainDialog
 from ui.dialogs.ctbc_train_dialog import CtbcTrainDialog
-from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker, CtbcWorker
+from ui.dialogs.reference_imitation_distillation_dialog import ReferenceImitationDistillationDialog
+from ui.workers import TesterWorker, VisionTrainerWorker, MoEWorker, HomingWorker, CtbcWorker, ReferenceImitationWorker
 from core.smooth_onnx_exporter import export_smoothed_onnx
 from PyQt5.QtWidgets import QSizePolicy
 from envs.initial_pose import get_default_initial_pose, get_initial_pose_joint_names
+from envs.humanoid_light_v2.reference_policy_manifest import (
+    load_distilled_locomotion_manifest,
+    sha256_file,
+)
 
 
 class _QtLogEmitter(QObject):
@@ -79,7 +85,7 @@ class MainWindow(QMainWindow):
             "lower_imu_ang_vel", "upper_imu_ang_vel",
             "lower_imu_projected_gravity", "upper_imu_projected_gravity",
             "height_map", "masked_height_map", "camera_height_map",
-            "last_action",
+            "last_action", "reference_progress",
         ]
 
         # Per-environment observation settings cache
@@ -125,6 +131,9 @@ class MainWindow(QMainWindow):
         self.ctbc_thread = None
         self.ctbc_worker = None
         self.ctbc_worker_mode = None
+        self.reference_distillation_thread = None
+        self.reference_distillation_worker = None
+        self.reference_distillation_dialog = None
         self.homing_command_timer = None
         self.tester = None
         self.current_command_values = [0.0] * 6
@@ -212,6 +221,7 @@ class MainWindow(QMainWindow):
             "stack_size": 3,
             "command_dim": 6,
             "command_scales": {"0": 1.0, "1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0, "5": 1.0},
+            "reference_progress_source": "",
             "height_map": {
                 "size_x": 1.0,
                 "size_y": 0.6,
@@ -312,6 +322,7 @@ class MainWindow(QMainWindow):
             "stack_size": stack_size_yaml,
             "command_dim": cmd_dim,
             "command_scales": merged_command_scales,
+            "reference_progress_source": "",
             "height_map": height_map_val,
             **obs_dict
         }
@@ -1286,9 +1297,15 @@ class MainWindow(QMainWindow):
         pose_defaults = get_default_initial_pose(env_id)
         joint_defaults = pose_defaults["joints"]
         base_z = pose_defaults["base_z"]
+        base_roll_deg = pose_defaults["base_roll_deg"]
+        base_pitch_deg = pose_defaults["base_pitch_deg"]
+        base_yaw_deg = pose_defaults["base_yaw_deg"]
         joints_raw = raw.get("joints", raw) if isinstance(raw, dict) else {}
         if isinstance(raw, dict):
             base_z = raw.get("base_z", raw.get("z", base_z))
+            base_roll_deg = raw.get("base_roll_deg", raw.get("roll_deg", base_roll_deg))
+            base_pitch_deg = raw.get("base_pitch_deg", raw.get("pitch_deg", base_pitch_deg))
+            base_yaw_deg = raw.get("base_yaw_deg", raw.get("yaw_deg", base_yaw_deg))
         if isinstance(joints_raw, dict):
             for joint_name in joint_defaults:
                 if joint_name in joints_raw:
@@ -1298,16 +1315,34 @@ class MainWindow(QMainWindow):
         else:
             for joint_name in joint_defaults:
                 joint_defaults[joint_name] = str(joint_defaults[joint_name])
-        return {"base_z": str(base_z), "joints": joint_defaults}
+        return {
+            "base_z": str(base_z),
+            "base_roll_deg": str(base_roll_deg),
+            "base_pitch_deg": str(base_pitch_deg),
+            "base_yaw_deg": str(base_yaw_deg),
+            "joints": joint_defaults,
+        }
+
+    def _copy_initial_pose_settings(self, env_id: str, settings):
+        """Normalize a cached initial-pose entry against its environment defaults."""
+
+        defaults = self._make_initial_pose_defaults(env_id)
+        settings = settings if isinstance(settings, dict) else {}
+        return {
+            "base_z": str(settings.get("base_z", defaults["base_z"])),
+            "base_roll_deg": str(settings.get("base_roll_deg", defaults["base_roll_deg"])),
+            "base_pitch_deg": str(settings.get("base_pitch_deg", defaults["base_pitch_deg"])),
+            "base_yaw_deg": str(settings.get("base_yaw_deg", defaults["base_yaw_deg"])),
+            "joints": dict(settings.get("joints", defaults["joints"])),
+        }
 
     def _ensure_initial_pose_defaults(self):
         env_id = self.env_id_cb.currentText()
         if env_id not in self.initial_pose_settings_by_env:
             self.initial_pose_settings_by_env[env_id] = self._make_initial_pose_defaults(env_id)
-        self.initial_pose_settings = {
-            "base_z": str((self.initial_pose_settings_by_env[env_id]).get("base_z", self._make_initial_pose_defaults(env_id).get("base_z", "0.3"))),
-            "joints": dict((self.initial_pose_settings_by_env[env_id]).get("joints", {}))
-        }
+        self.initial_pose_settings = self._copy_initial_pose_settings(
+            env_id, self.initial_pose_settings_by_env[env_id]
+        )
 
     def _make_final_pose_defaults(self, env_id: str):
         initial = self._make_initial_pose_defaults(env_id).get("joints", {})
@@ -1383,8 +1418,8 @@ class MainWindow(QMainWindow):
 
     def _command_dim_for_env(self, env_id: str):
         if env_id in self.obs_settings_by_env:
-            return max(1, to_int(self.obs_settings_by_env[env_id].get("command_dim", 6), 6))
-        return max(1, to_int(self._make_observation_defaults(env_id).get("command_dim", 6), 6))
+            return max(0, to_int(self.obs_settings_by_env[env_id].get("command_dim", 6), 6))
+        return max(0, to_int(self._make_observation_defaults(env_id).get("command_dim", 6), 6))
 
     def _make_homing_command_range_defaults(self, env_id: str):
         cmd_dim = self._command_dim_for_env(env_id)
@@ -1443,7 +1478,7 @@ class MainWindow(QMainWindow):
     def _humanoid_reference_policy_path():
         return (
             "/home/sanghyunryoo/Documents/4w4l/Isaac-RL-Two-wheel-Legged-Bot_joint/"
-            "logs/co_rl/Humanoid_Light_Flat_Reference_Motion/ppo/2026-09-09_02-09-02/"
+            "logs/co_rl/Humanoid_Light_Flat_Reference_Motion/ppo/2026-09-10_04-39-58/"
             "exported/policy.onnx"
         )
 
@@ -1465,6 +1500,105 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _selected_reference_motion_path(self):
+        if not hasattr(self, "reference_motion_cb"):
+            return ""
+        motion_name = self.reference_motion_cb.currentText().strip()
+        if not motion_name:
+            return ""
+        return os.path.join(self._humanoid_reference_motion_dir(), motion_name)
+
+    def _reference_distilled_output_path(self):
+        motion_path = self._selected_reference_motion_path()
+        motion_stem = os.path.splitext(os.path.basename(motion_path))[0] if motion_path else "selected_motion"
+        return os.path.join(
+            self._repo_root(),
+            "envs", "humanoid_light_v2", "weights", "reference_locomotion", motion_stem,
+            "reference_locomotion.onnx",
+        )
+
+    def _selected_reference_student_manifest(self):
+        policy_path = self.policy_file_le.text().strip() if hasattr(self, "policy_file_le") else ""
+        if not policy_path:
+            return None
+        return load_distilled_locomotion_manifest(policy_path)
+
+    def _reference_manifest_matches_selected_motion(self, manifest):
+        if not manifest:
+            return False
+        motion_path = self._selected_reference_motion_path()
+        expected_hash = str((manifest.get("reference_motion", {}) or {}).get("sha256", ""))
+        if not motion_path or not expected_hash or not os.path.isfile(motion_path):
+            return False
+        try:
+            return sha256_file(motion_path) == expected_hash
+        except OSError:
+            return False
+
+    @staticmethod
+    def _reference_progress_observation_error(settings_cfg):
+        """Return the user-facing contract error, or ``None`` when valid."""
+        settings_cfg = settings_cfg or {}
+        stacked = list(settings_cfg.get("stacked_obs_order", []) or [])
+        non_stacked = list(settings_cfg.get("non_stacked_obs_order", []) or [])
+        progress_cfg = settings_cfg.get("reference_progress") or {}
+        if "reference_progress" in stacked or non_stacked.count("reference_progress") != 1:
+            return "Open Observation Settings and add Reference Progress exactly once under Non-Stacked Observation."
+        if not non_stacked or non_stacked[-1] != "reference_progress":
+            return "Place Reference Progress last in Non-Stacked Observation; it becomes the final (91st) student input."
+        if to_int(settings_cfg.get("command_dim", -1), -1) != 0:
+            return "Set Command Dim to 0 for the 91-D reference student; phase replaces the command tail."
+        phase_source = str(settings_cfg.get("reference_progress_source", "")).strip()
+        if not phase_source or not os.path.isfile(phase_source):
+            return "Choose a valid Reference Progress Source (.npz) in Observation Settings."
+        if to_int(progress_cfg.get("freq", 0), 0) != 50 or not np.isclose(
+            to_float(progress_cfg.get("scale", float("nan")), float("nan")), 1.0
+        ):
+            return "Reference Progress must use its fixed 50 Hz frequency and scale 1.0."
+        return None
+
+    @staticmethod
+    def _teacher_config_without_reference_progress(student_config):
+        """Restore the fixed 276-D Isaac teacher contract from student settings."""
+        teacher_config = copy.deepcopy(student_config)
+        settings_cfg = dict(teacher_config.get("settings", teacher_config.get("observation", {})) or {})
+        settings_cfg["stacked_obs_order"] = [
+            name for name in list(settings_cfg.get("stacked_obs_order", []) or [])
+            if name != "reference_progress"
+        ]
+        settings_cfg["non_stacked_obs_order"] = [
+            name for name in list(settings_cfg.get("non_stacked_obs_order", []) or [])
+            if name != "reference_progress"
+        ]
+        settings_cfg.pop("reference_progress", None)
+        # The Isaac teacher retained four zero command slots in its 276-D
+        # input. The 91-D student omits that command tail entirely.
+        settings_cfg["command_dim"] = 4
+        settings_cfg["command_scales"] = {str(index): 1.0 for index in range(4)}
+        teacher_config["settings"] = settings_cfg
+        teacher_config["observation"] = settings_cfg
+        return teacher_config
+
+    def _refresh_reference_policy_note(self):
+        if not hasattr(self, "reference_policy_note"):
+            return
+        manifest = self._selected_reference_student_manifest()
+        if manifest is not None:
+            if self._reference_manifest_matches_selected_motion(manifest):
+                self.reference_policy_note.setText(
+                    f"Validated distilled trajectory policy ({int(manifest.get('obs_dim', 0))} → 26): "
+                    "Reference Progress is supplied through Non-Stacked Observation."
+                )
+                self.reference_policy_note.setStyleSheet("color: #2563EB;")
+            else:
+                self.reference_policy_note.setText(
+                    "This distilled locomotion policy belongs to a different reference clip. Select its clip before Start Test."
+                )
+                self.reference_policy_note.setStyleSheet("color: #B45309;")
+        else:
+            self.reference_policy_note.setText("Isaac reference teacher (276 → 26): command is fixed to zero.")
+            self.reference_policy_note.setStyleSheet("color: #64748B;")
+
     def _update_reference_inference_ui(self):
         if not hasattr(self, "reference_inference_cb"):
             return
@@ -1474,13 +1608,144 @@ class MainWindow(QMainWindow):
         self.reference_motion_cb.setEnabled(reference_selected)
         self.reference_reset_noise_cb.setEnabled(reference_selected)
         self.reference_policy_note.setVisible(reference_selected)
+        if hasattr(self, "reference_export_locomotion_btn"):
+            self.reference_export_locomotion_btn.setVisible(reference_selected)
+            self.reference_export_locomotion_btn.setEnabled(reference_selected)
         if reference_selected:
-            reference_policy = self._humanoid_reference_policy_path()
-            if os.path.isfile(reference_policy):
-                self.policy_file_le.setText(reference_policy)
+            # Do not overwrite a manifest-backed student selected after a
+            # previous export.  Any other policy is reset to the canonical
+            # 276-D teacher so entering reference mode remains one-click.
+            if self._selected_reference_student_manifest() is None:
+                reference_policy = self._humanoid_reference_policy_path()
+                if os.path.isfile(reference_policy):
+                    self.policy_file_le.setText(reference_policy)
             self.sensor_noise_cb.setCurrentText("none")
             self.init_noise_slider.setValue(0)
             self._update_reference_motion_duration()
+            self._refresh_reference_policy_note()
+
+    def open_reference_distillation_dialog(self):
+        if not self._is_humanoid_reference_inference():
+            QMessageBox.warning(self, "Reference Locomotion Export", "Select Humanoid Light → Reference Imitation first.")
+            return
+        motion_path = self._selected_reference_motion_path()
+        if not motion_path or not os.path.isfile(motion_path):
+            QMessageBox.warning(self, "Reference Locomotion Export", "Select a valid reference motion.")
+            return
+        if self.reference_distillation_dialog is None:
+            self.reference_distillation_dialog = ReferenceImitationDistillationDialog(self)
+            self.reference_distillation_dialog.trainRequested.connect(self.start_reference_distillation)
+            self.reference_distillation_dialog.stopRequested.connect(self.stop_reference_distillation)
+        self.reference_distillation_dialog.set_context(
+            motion_path=motion_path,
+            teacher_path=self._humanoid_reference_policy_path(),
+            output_path=self._reference_distilled_output_path(),
+        )
+        self.reference_distillation_dialog.show()
+        self.reference_distillation_dialog.raise_()
+        self.reference_distillation_dialog.activateWindow()
+
+    def start_reference_distillation(self):
+        dialog = self.reference_distillation_dialog
+        if dialog is None:
+            return
+        if self.reference_distillation_thread is not None and self.reference_distillation_thread.isRunning():
+            QMessageBox.warning(self, "Reference Locomotion Export", "A reference distillation job is already running.")
+            return
+        raw_settings = dialog.settings()
+        teacher_path = raw_settings.get("teacher_policy_path", "")
+        output_path = raw_settings.get("output_path", "")
+        if not os.path.isfile(teacher_path):
+            QMessageBox.warning(self, "Reference Locomotion Export", "Select a valid 276-D reference teacher ONNX.")
+            return
+        if not output_path:
+            QMessageBox.warning(self, "Reference Locomotion Export", "Choose where to export the trajectory ONNX.")
+            return
+        student_config = self._gather_config()
+        if student_config is None:
+            return
+        settings_error = self._reference_progress_observation_error(student_config.get("settings", {}))
+        if settings_error:
+            QMessageBox.warning(self, "Reference Locomotion Export", settings_error)
+            return
+        teacher_config = self._teacher_config_without_reference_progress(student_config)
+        teacher_config.setdefault("reference_motion", {})["inference_mode"] = "teacher"
+        teacher_config["reference_motion"]["reset_perturbation"] = False
+        student_config.setdefault("reference_motion", {})["inference_mode"] = "distilled_locomotion"
+        student_config["reference_motion"]["reset_perturbation"] = False
+
+        try:
+            worker_settings = {
+                "teacher_config": teacher_config,
+                "student_config": student_config,
+                "teacher_policy_path": teacher_path,
+                "output_path": output_path,
+                "samples_per_round": max(1, to_int(raw_settings.get("samples_per_round"), 6000)),
+                "dagger_rounds": max(1, to_int(raw_settings.get("dagger_rounds"), 6)),
+                "epochs_per_round": max(1, to_int(raw_settings.get("epochs_per_round"), 25)),
+                "batch_size": max(1, to_int(raw_settings.get("batch_size"), 512)),
+                "learning_rate": max(1e-8, to_float(raw_settings.get("learning_rate"), 5e-4)),
+                "hidden_dim": max(16, to_int(raw_settings.get("hidden_dim"), 512)),
+                "seed": to_int(raw_settings.get("seed"), 42),
+            }
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Reference Locomotion Export", f"Invalid training setting: {exc}")
+            return
+
+        dialog.log_output.clear()
+        dialog.append_log("[reference-distill] starting MuJoCo DAgger collection and ONNX export.")
+        dialog.set_running(True)
+        self.reference_distillation_thread = QThread()
+        self.reference_distillation_worker = ReferenceImitationWorker(self._repo_root(), worker_settings)
+        self.reference_distillation_worker.moveToThread(self.reference_distillation_thread)
+        self.reference_distillation_thread.started.connect(self.reference_distillation_worker.run)
+        self.reference_distillation_worker.log.connect(self.on_reference_distillation_log)
+        self.reference_distillation_worker.finished.connect(self.on_reference_distillation_finished)
+        self.reference_distillation_worker.error.connect(self.on_reference_distillation_error)
+        self.reference_distillation_worker.finished.connect(self.reference_distillation_thread.quit)
+        self.reference_distillation_worker.error.connect(self.reference_distillation_thread.quit)
+        self.reference_distillation_worker.finished.connect(self.reference_distillation_worker.deleteLater)
+        self.reference_distillation_worker.error.connect(self.reference_distillation_worker.deleteLater)
+        self.reference_distillation_thread.finished.connect(self._on_reference_distillation_thread_finished)
+        self.reference_distillation_thread.finished.connect(self.reference_distillation_thread.deleteLater)
+        self.reference_distillation_thread.start()
+
+    def stop_reference_distillation(self):
+        if self.reference_distillation_worker is not None:
+            self.reference_distillation_worker.request_stop()
+        if self.reference_distillation_dialog is not None:
+            self.reference_distillation_dialog.append_log("[reference-distill] stop requested by user.")
+            self.reference_distillation_dialog.set_status("stopping")
+
+    def on_reference_distillation_log(self, message):
+        if self.reference_distillation_dialog is not None:
+            self.reference_distillation_dialog.append_log(message)
+
+    def on_reference_distillation_finished(self, summary):
+        summary = dict(summary or {})
+        onnx_path = str(summary.get("onnx_path", ""))
+        if self.reference_distillation_dialog is not None:
+            self.reference_distillation_dialog.set_running(False)
+            self.reference_distillation_dialog.set_status("exported")
+            self.reference_distillation_dialog.append_log(f"[reference-distill] manifest: {summary.get('manifest_path', '')}")
+        if onnx_path and os.path.isfile(onnx_path):
+            self.policy_file_le.setText(onnx_path)
+            self._refresh_reference_policy_note()
+        message = "Locomotion ONNX exported and selected for Start Test."
+        QMessageBox.information(self, "Reference Locomotion Export", message)
+
+    def on_reference_distillation_error(self, error_msg):
+        if self.reference_distillation_dialog is not None:
+            self.reference_distillation_dialog.set_running(False)
+            self.reference_distillation_dialog.set_status("error")
+            self.reference_distillation_dialog.append_log(f"[reference-distill] ERROR: {error_msg}")
+        QMessageBox.critical(self, "Reference Locomotion Export", error_msg)
+
+    def _on_reference_distillation_thread_finished(self):
+        self.reference_distillation_thread = None
+        self.reference_distillation_worker = None
+        if self.reference_distillation_dialog is not None:
+            self.reference_distillation_dialog.set_running(False)
 
     def _default_height_map_frame_body(self, env_id: str):
         _ = env_id
@@ -1869,16 +2134,14 @@ class MainWindow(QMainWindow):
         self.hardware_settings_by_env[new_env_id] = (self.hardware_settings).copy()
 
         if new_env_id in self.initial_pose_settings_by_env:
-            self.initial_pose_settings = {
-                "base_z": str((self.initial_pose_settings_by_env[new_env_id]).get("base_z", self._make_initial_pose_defaults(new_env_id).get("base_z", "0.3"))),
-                "joints": dict((self.initial_pose_settings_by_env[new_env_id]).get("joints", {}))
-            }
+            self.initial_pose_settings = self._copy_initial_pose_settings(
+                new_env_id, self.initial_pose_settings_by_env[new_env_id]
+            )
         else:
             self.initial_pose_settings = self._make_initial_pose_defaults(new_env_id)
-            self.initial_pose_settings_by_env[new_env_id] = {
-                "base_z": str((self.initial_pose_settings).get("base_z", "0.3")),
-                "joints": dict((self.initial_pose_settings).get("joints", {}))
-            }
+            self.initial_pose_settings_by_env[new_env_id] = self._copy_initial_pose_settings(
+                new_env_id, self.initial_pose_settings
+            )
         self._ensure_final_pose_defaults_for_env(new_env_id)
         self._ensure_homing_command_ranges_for_env(new_env_id)
 
@@ -2314,16 +2577,28 @@ class MainWindow(QMainWindow):
         self.reference_reset_noise_cb.setToolTip("Apply Isaac training reset noise: root XY and joints ±0.02.")
         env_layout.addRow("Reference Reset:", self.reference_reset_noise_cb)
 
-        self.reference_policy_note = QLabel("Uses the supplied Humanoid Light reference ONNX (276 → 26).")
+        self.reference_policy_note = QLabel("Isaac reference teacher (276 → 26): command is fixed to zero.")
         self.reference_policy_note.setStyleSheet("color: #64748B;")
         self.reference_policy_note.setWordWrap(True)
         env_layout.addRow("Reference Policy:", self.reference_policy_note)
 
+        self.reference_export_locomotion_btn = QPushButton("Export Locomotion Policy")
+        self.reference_export_locomotion_btn.setToolTip(
+            "Distill the selected 276-D reference teacher into a 91-D trajectory ONNX: 90-D locomotion plus Reference Progress."
+        )
+        self.reference_export_locomotion_btn.clicked.connect(self.open_reference_distillation_dialog)
+        env_layout.addRow("Reference Export:", self.reference_export_locomotion_btn)
+
         self.max_duration_le = QLineEdit("120.0")
+        self.max_duration_le.setToolTip(
+            "Reference Imitation initially uses the selected clip length. "
+            "You can increase this value to inspect the policy after the clip ends."
+        )
         env_layout.addRow("Max Duration (s):", self.max_duration_le)
 
         self.reference_inference_cb.currentTextChanged.connect(self._update_reference_inference_ui)
         self.reference_motion_cb.currentTextChanged.connect(self._update_reference_motion_duration)
+        self.reference_motion_cb.currentTextChanged.connect(self._refresh_reference_policy_note)
 
         actuator_btn = QPushButton("Actuator Settings")
         actuator_btn.clicked.connect(self.open_actuator_settings)
@@ -2539,6 +2814,8 @@ class MainWindow(QMainWindow):
 
         # === Policy File (기본) ===
         self.policy_file_le = QLineEdit()
+        self.policy_file_le.editingFinished.connect(self._refresh_reference_policy_note)
+        self.policy_file_le.textChanged.connect(self._refresh_reference_policy_note)
         browse_btn = QPushButton("Browse")
         browse_btn.clicked.connect(self.browse_policy_file)
 
@@ -3647,6 +3924,9 @@ class MainWindow(QMainWindow):
             initial_pose = self._make_initial_pose_defaults(env_id)
         initial_positions = {
             "base_z": to_float(initial_pose.get("base_z", self._make_initial_pose_defaults(env_id).get("base_z", 0.3)), 0.3),
+            "base_roll_deg": to_float(initial_pose.get("base_roll_deg", 0.0), 0.0),
+            "base_pitch_deg": to_float(initial_pose.get("base_pitch_deg", 0.0), 0.0),
+            "base_yaw_deg": to_float(initial_pose.get("base_yaw_deg", 0.0), 0.0),
             "joints": {
                 joint_name: to_float(value, 0.0)
                 for joint_name, value in dict(initial_pose.get("joints", {})).items()
@@ -4163,7 +4443,11 @@ class MainWindow(QMainWindow):
         self._ensure_observation_defaults()  # Sync cache
         dialog = ObservationSettingsDialog((self.observation_settings).copy(), self)
         if dialog.exec_() == QDialog.Accepted:
-            self.observation_settings = dialog.get_settings()
+            try:
+                self.observation_settings = dialog.get_settings()
+            except ValueError as exc:
+                QMessageBox.warning(self, "Observation Settings", str(exc))
+                return
             # Save current env settings back into the cache (so they restore next time)
             self.obs_settings_by_env[env_id] = (self.observation_settings).copy()
             # Mark that user manually changed settings (for reference)
@@ -4175,10 +4459,9 @@ class MainWindow(QMainWindow):
         dialog = InitialPoseSettingsDialog((self.initial_pose_settings).copy(), self)
         if dialog.exec_() == QDialog.Accepted:
             self.initial_pose_settings = dialog.get_settings()
-            self.initial_pose_settings_by_env[env_id] = {
-                "base_z": str((self.initial_pose_settings).get("base_z", "0.3")),
-                "joints": dict((self.initial_pose_settings).get("joints", {}))
-            }
+            self.initial_pose_settings_by_env[env_id] = self._copy_initial_pose_settings(
+                env_id, self.initial_pose_settings
+            )
 
     def open_final_pose_settings(self):
         env_id = self.homing_dialog.get_settings().get("env_id", self.env_id_cb.currentText()) if self.homing_dialog is not None else self.env_id_cb.currentText()
@@ -4351,6 +4634,9 @@ class MainWindow(QMainWindow):
                 })
             initial_positions = {
                 "base_z": to_float(self.initial_pose_settings.get("base_z", self._make_initial_pose_defaults(self.env_id_cb.currentText()).get("base_z", 0.3)), 0.3),
+                "base_roll_deg": to_float(self.initial_pose_settings.get("base_roll_deg", 0.0), 0.0),
+                "base_pitch_deg": to_float(self.initial_pose_settings.get("base_pitch_deg", 0.0), 0.0),
+                "base_yaw_deg": to_float(self.initial_pose_settings.get("base_yaw_deg", 0.0), 0.0),
                 "joints": {
                     joint_name: to_float(value, 0.0)
                     for joint_name, value in (self.initial_pose_settings.get("joints", {})).items()
@@ -4499,12 +4785,18 @@ class MainWindow(QMainWindow):
             fine_tune_cfg = self._collect_fine_tune_ui_settings()
 
             reference_enabled = self._is_humanoid_reference_inference()
+            selected_student_manifest = self._selected_reference_student_manifest()
+            if env_id == "humanoid_light_v2" and selected_student_manifest is not None:
+                settings_error = self._reference_progress_observation_error(settings_cfg)
+                if settings_error:
+                    raise RuntimeError(settings_error)
             reference_motion_cfg = {"enabled": False}
             if reference_enabled:
                 motion_name = self.reference_motion_cb.currentText().strip()
                 motion_path = os.path.join(self._humanoid_reference_motion_dir(), motion_name)
                 if not motion_name or not os.path.isfile(motion_path):
                     raise RuntimeError("Select a valid Humanoid Light reference motion.")
+                student_manifest = selected_student_manifest
                 reference_motion_cfg = {
                     "enabled": True,
                     "directory": self._humanoid_reference_motion_dir(),
@@ -4512,6 +4804,20 @@ class MainWindow(QMainWindow):
                     "reset_perturbation": bool(self.reference_reset_noise_cb.isChecked()),
                     "fall_height": 0.35,
                 }
+                if student_manifest is not None:
+                    if not self._reference_manifest_matches_selected_motion(student_manifest):
+                        expected_name = str((student_manifest.get("reference_motion", {}) or {}).get("filename", "this policy's clip"))
+                        raise RuntimeError(
+                            "Selected distilled locomotion ONNX is bound to "
+                            f"'{expected_name}', not the currently selected reference motion."
+                        )
+                    settings_error = self._reference_progress_observation_error(settings_cfg)
+                    if settings_error:
+                        raise RuntimeError(settings_error)
+                    reference_motion_cfg["inference_mode"] = "distilled_locomotion"
+                    reference_motion_cfg["manifest_path"] = os.path.splitext(self.policy_file_le.text().strip())[0] + ".reference_imitation.json"
+                else:
+                    reference_motion_cfg["inference_mode"] = "teacher"
 
             config = {
                 "env": {

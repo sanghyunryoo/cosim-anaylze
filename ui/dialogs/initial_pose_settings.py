@@ -16,7 +16,9 @@ class InitialPoseSettingsDialog(QDialog):
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
 
-        description = QLabel("Set the initial base height and initial joint positions for this robot.")
+        description = QLabel(
+            "Set the physical robot start pose used at reset. Base orientation is roll/pitch/yaw in degrees."
+        )
         description.setWordWrap(True)
         main_layout.addWidget(description)
 
@@ -30,7 +32,19 @@ class InitialPoseSettingsDialog(QDialog):
 
         self.base_z_le = QLineEdit(str(self.initial_pose_settings.get("base_z", "0.3")))
         self.base_z_le.setValidator(QDoubleValidator())
-        form_layout.addRow(QLabel("base_z"), self.base_z_le)
+        form_layout.addRow(QLabel("base_z (m)"), self.base_z_le)
+
+        self.base_roll_deg_le = QLineEdit(str(self.initial_pose_settings.get("base_roll_deg", "0.0")))
+        self.base_roll_deg_le.setValidator(QDoubleValidator())
+        form_layout.addRow(QLabel("base_roll (deg)"), self.base_roll_deg_le)
+
+        self.base_pitch_deg_le = QLineEdit(str(self.initial_pose_settings.get("base_pitch_deg", "0.0")))
+        self.base_pitch_deg_le.setValidator(QDoubleValidator())
+        form_layout.addRow(QLabel("base_pitch (deg)"), self.base_pitch_deg_le)
+
+        self.base_yaw_deg_le = QLineEdit(str(self.initial_pose_settings.get("base_yaw_deg", "0.0")))
+        self.base_yaw_deg_le.setValidator(QDoubleValidator())
+        form_layout.addRow(QLabel("base_yaw (deg)"), self.base_yaw_deg_le)
 
         joints = self.initial_pose_settings.get("joints", {})
         for joint_name, value in joints.items():
@@ -53,5 +67,8 @@ class InitialPoseSettingsDialog(QDialog):
     def get_settings(self):
         return {
             "base_z": self.base_z_le.text(),
+            "base_roll_deg": self.base_roll_deg_le.text(),
+            "base_pitch_deg": self.base_pitch_deg_le.text(),
+            "base_yaw_deg": self.base_yaw_deg_le.text(),
             "joints": {joint_name: field.text() for joint_name, field in self.fields.items()}
         }

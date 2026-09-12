@@ -4,6 +4,7 @@ from core.vision_heightmap_trainer import VisionHeightMapTrainer
 from core.moe_trainer import MoETrainer
 from core.homing_trainer import HomingTrainer
 from core.ctbc_trainer import CtbcTrainer
+from core.reference_imitation_trainer import ReferenceImitationTrainer
 
 
 class TesterWorker(QObject):
@@ -187,6 +188,38 @@ class HomingWorker(QObject):
             self.finished.emit(summary)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class ReferenceImitationWorker(QObject):
+    """Run reference-teacher DAgger without blocking the Qt event loop."""
+
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+    log = pyqtSignal(str)
+
+    def __init__(self, repo_root: str, settings: dict):
+        super().__init__()
+        self.repo_root = repo_root
+        self.settings = dict(settings or {})
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def stop_requested(self):
+        return bool(self._stop_requested)
+
+    def run(self):
+        try:
+            trainer = ReferenceImitationTrainer(
+                repo_root=self.repo_root,
+                settings=self.settings,
+                log_callback=self.log.emit,
+                stop_callback=self.stop_requested,
+            )
+            self.finished.emit(trainer.train_and_export())
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 class CtbcWorker(QObject):

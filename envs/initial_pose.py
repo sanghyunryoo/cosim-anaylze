@@ -161,6 +161,11 @@ def get_default_initial_pose(env_id):
     metadata = get_initial_pose_metadata(env_id)
     return {
         "base_z": float(metadata["base_z"]),
+        # GUI values use degrees so the commanded physical start attitude is
+        # readable and easy to measure. MuJoCo qpos still receives wxyz.
+        "base_roll_deg": 0.0,
+        "base_pitch_deg": 0.0,
+        "base_yaw_deg": 0.0,
         "joints": get_default_initial_joint_map(env_id),
     }
 
@@ -202,6 +207,54 @@ def _base_z_override(config, default_base_z):
     return float(default_base_z)
 
 
+def _finite_float(value, default):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return value if np.isfinite(value) else float(default)
+
+
+def _base_quaternion_override(config):
+    """Return the configured base orientation as a normalized wxyz quaternion."""
+
+    raw = _initial_pose_config(config)
+    if not isinstance(raw, dict):
+        raw = {}
+
+    # A quaternion is useful for programmatic callers; the GUI writes the
+    # human-readable Euler-degree fields below.
+    for key in ("base_quat_wxyz", "base_quaternion_wxyz"):
+        values = raw.get(key)
+        if isinstance(values, str):
+            values = values.replace(",", " ").split()
+        try:
+            quat = np.asarray(values, dtype=np.float64).reshape(4)
+        except (TypeError, ValueError):
+            continue
+        norm = np.linalg.norm(quat)
+        if np.isfinite(norm) and norm > 1.0e-8:
+            return quat / norm
+
+    roll = np.deg2rad(_finite_float(raw.get("base_roll_deg", raw.get("roll_deg", 0.0)), 0.0))
+    pitch = np.deg2rad(_finite_float(raw.get("base_pitch_deg", raw.get("pitch_deg", 0.0)), 0.0))
+    yaw = np.deg2rad(_finite_float(raw.get("base_yaw_deg", raw.get("yaw_deg", 0.0)), 0.0))
+
+    half_roll, half_pitch, half_yaw = roll / 2.0, pitch / 2.0, yaw / 2.0
+    cr, sr = np.cos(half_roll), np.sin(half_roll)
+    cp, sp = np.cos(half_pitch), np.sin(half_pitch)
+    cy, sy = np.cos(half_yaw), np.sin(half_yaw)
+    return np.array(
+        [
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+        ],
+        dtype=np.float64,
+    )
+
+
 def build_initial_qpos(model, mujoco_utils, config, env_id, init_noise, joint_names=None):
     metadata = get_initial_pose_metadata(env_id)
     resolved_joint_names = list(joint_names or metadata["joint_names"])
@@ -209,7 +262,7 @@ def build_initial_qpos(model, mujoco_utils, config, env_id, init_noise, joint_na
 
     qpos = np.zeros(model.nq, dtype=np.float64)
     qpos[2] = _base_z_override(config, metadata["base_z"])
-    qpos[3:7] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    qpos[3:7] = _base_quaternion_override(config)
 
     if not resolved_joint_names:
         return qpos

@@ -11,6 +11,10 @@ from core.heightmap_dataset_writer import HeightMapDatasetWriter
 from core.vision_heightmap_inference import VisionHeightMapInferencer
 from core.reporter import Reporter
 from envs.build import build_env
+from envs.humanoid_light_v2.reference_policy_manifest import (
+    load_distilled_locomotion_manifest,
+    sha256_file,
+)
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
@@ -336,25 +340,117 @@ class Tester(QObject):
         self.close()
         self.finished.emit()
 
+    @staticmethod
+    def _reference_observation_contract(settings):
+        """Canonical subset which changes the student observation meaning."""
+        settings = settings or {}
+        stacked = list(settings.get("stacked_obs_order", []) or [])
+        non_stacked = list(settings.get("non_stacked_obs_order", []) or [])
+        names = list(dict.fromkeys(stacked + non_stacked))
+        per_observation = {}
+        for name in names:
+            value = settings.get(name) or {}
+            per_observation[name] = {
+                "freq": int(value.get("freq", 50)),
+                "scale": float(value.get("scale", 1.0)),
+            }
+        return {
+            "stack_size": int(settings.get("stack_size", 1)),
+            "stacked_obs_order": stacked,
+            "non_stacked_obs_order": non_stacked,
+            "command_dim": int(settings.get("command_dim", 0)),
+            "per_observation": per_observation,
+        }
+
     def _validate_reference_policy_contract(self, state):
-        """Fail before simulation when a non-reference ONNX is selected."""
+        """Fail before simulation when an incompatible ONNX is selected."""
 
         reference_cfg = self.config.get("reference_motion", {}) or {}
-        if not bool(reference_cfg.get("enabled", False)):
+        reference_enabled = bool(reference_cfg.get("enabled", False))
+        manifest = load_distilled_locomotion_manifest(self.policy_path)
+        if not reference_enabled and manifest is None:
             return
         if self.config.get("policy", {}).get("policy_type", "MLP").strip().lower() != "mlp":
             raise RuntimeError("Humanoid Light reference inference requires the exported single-input MLP ONNX policy.")
-        if np.asarray(state).shape != (276,):
-            raise RuntimeError(f"Humanoid Light reference observation must be 276-D, got {np.asarray(state).shape}.")
+        if not reference_enabled:
+            expected_obs_dim = int(manifest["obs_dim"])
+            policy_label = "distilled trajectory locomotion"
+            current_contract = self._reference_observation_contract(
+                self.config.get("settings", self.config.get("observation", {}))
+            )
+            if current_contract != manifest.get("observation_contract"):
+                raise RuntimeError(
+                    "Observation Settings do not match this distilled policy. "
+                    "Use the same stacked/non-stacked order, scale, frequency, Command Dim=0, and phase source."
+                )
+            settings_cfg = self.config.get("settings", self.config.get("observation", {})) or {}
+            phase_source = str(settings_cfg.get("reference_progress_source", "")).strip()
+            expected_phase_hash = str((manifest.get("phase_source", {}) or {}).get("sha256", ""))
+            try:
+                expected_policy_hash = str(manifest.get("onnx_sha256", ""))
+                if expected_policy_hash and sha256_file(self.policy_path) != expected_policy_hash:
+                    raise RuntimeError("The selected ONNX no longer matches its reference-imitation manifest.")
+                if not phase_source or sha256_file(phase_source) != expected_phase_hash:
+                    raise RuntimeError(
+                        "The configured Reference Progress Source does not match the NPZ used to export this policy."
+                    )
+            except OSError as exc:
+                raise RuntimeError(f"Could not validate Reference Progress Source: {exc}") from exc
+        else:
+            mode = str(reference_cfg.get("inference_mode", "teacher")).strip().lower()
+            if mode == "teacher":
+                expected_obs_dim = 276
+                policy_label = "Isaac reference teacher"
+            elif mode == "distilled_locomotion":
+                policy_label = "distilled reference trajectory"
+                if manifest is None:
+                    raise RuntimeError(
+                        "A distilled reference trajectory ONNX must have its .reference_imitation.json manifest. "
+                        "Use Export Locomotion Policy instead of selecting a generic locomotion ONNX."
+                    )
+                expected_obs_dim = int(manifest["obs_dim"])
+                current_contract = self._reference_observation_contract(
+                    self.config.get("settings", self.config.get("observation", {}))
+                )
+                if current_contract != manifest.get("observation_contract"):
+                    raise RuntimeError(
+                        "Observation Settings do not match this distilled policy. "
+                        "Use the same stacked/non-stacked order, scale, frequency, and command settings used for export."
+                    )
+                selected_motion = str(reference_cfg.get("motion", "")).strip()
+                expected_hash = str((manifest.get("reference_motion", {}) or {}).get("sha256", ""))
+                settings_cfg = self.config.get("settings", self.config.get("observation", {})) or {}
+                phase_source = str(settings_cfg.get("reference_progress_source", "")).strip()
+                expected_phase_hash = str((manifest.get("phase_source", {}) or {}).get("sha256", ""))
+                try:
+                    expected_policy_hash = str(manifest.get("onnx_sha256", ""))
+                    if expected_policy_hash and sha256_file(self.policy_path) != expected_policy_hash:
+                        raise RuntimeError("The selected ONNX no longer matches its reference-imitation manifest.")
+                    if not selected_motion or sha256_file(selected_motion) != expected_hash:
+                        raise RuntimeError(
+                            "The selected distilled locomotion ONNX was exported for a different reference motion."
+                        )
+                    if not phase_source or sha256_file(phase_source) != expected_phase_hash:
+                        raise RuntimeError(
+                            "The configured Reference Progress Source does not match the NPZ used to export this policy."
+                        )
+                except OSError as exc:
+                    raise RuntimeError(f"Could not validate distilled policy reference motion or phase source: {exc}") from exc
+            else:
+                raise RuntimeError(f"Unknown Humanoid Light reference inference mode: {mode}")
+        if np.asarray(state).shape != (expected_obs_dim,):
+            raise RuntimeError(
+                f"Humanoid Light {policy_label} observation must be {expected_obs_dim}-D, got {np.asarray(state).shape}."
+            )
         session = getattr(self.policy, "ort_session", None)
         if session is None:
             raise RuntimeError("Humanoid Light reference inference requires an ONNX MLP policy session.")
         input_shape = list(session.get_inputs()[0].shape)
         output_shape = list(session.get_outputs()[0].shape)
-        if input_shape[-1] != 276 or output_shape[-1] != 26:
+        if input_shape[-1] != expected_obs_dim or output_shape[-1] != 26:
             raise RuntimeError(
-                "Selected ONNX does not match Humanoid Light reference policy contract: "
-                f"expected [*, 276] -> [*, 26], got {input_shape} -> {output_shape}."
+                f"Selected ONNX does not match the Humanoid Light {policy_label} contract: "
+                f"expected [*, {expected_obs_dim}] -> [*, 26], got {input_shape} -> {output_shape}."
             )
 
     def stop(self):

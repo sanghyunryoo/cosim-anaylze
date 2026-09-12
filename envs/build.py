@@ -15,6 +15,7 @@ from envs.humanoid_light_v2.reference_motion_loader import (
 )
 from envs.wrappers import (
     CommandWrapper,
+    ReferenceMotionProgressWrapper,
     ReferenceMotionResetWrapper,
     ReferenceMotionTargetWrapper,
     StateBuildWrapper,
@@ -69,8 +70,11 @@ def build_env(config):
         raise ValueError("reference_motion.directory is required for Humanoid Light reference inference.")
       reference_path = resolve_reference_motion(reference_cfg.get("motion"), reference_dir)
       reference_motion = HumanoidLightReferenceMotion(reference_path, env.joint_names_in_order)
-      # Isaac uses the selected clip's frame count/fps as episode_length_s.
-      config["env"]["max_duration"] = reference_motion.duration_s
+      # Do not overwrite env.max_duration with the clip duration here.  The
+      # GUI initialises it from the selected clip, but an explicit user value
+      # must reach TimeLimitWrapper so post-clip behaviour can be inspected.
+      # Reference values/commands are clamped to the last clip frame after
+      # the clip ends.
       config["reference_motion"] = {
         **reference_cfg,
         "enabled": True,
@@ -80,8 +84,17 @@ def build_env(config):
 
     env = StateBuildWrapper(env, config)
     env = TimeLimitWrapper(env, config)
+    # A zero command dimension is a supported no-command configuration. This
+    # keeps the standard locomotion wrapper flow unchanged for the 91-D
+    # reference student: StateBuild(90 + progress) -> CommandWrapper(0).
     env = CommandWrapper(env, config)
     if reference_motion is not None:
-      env = ReferenceMotionTargetWrapper(env, reference_motion, control_freq=50.0, config=config)
+      inference_mode = str(reference_cfg.get("inference_mode", "teacher")).strip().lower()
+      if inference_mode == "teacher":
+        env = ReferenceMotionTargetWrapper(env, reference_motion, control_freq=50.0, config=config)
+      elif inference_mode == "distilled_locomotion":
+        env = ReferenceMotionProgressWrapper(env, reference_motion, control_freq=50.0, config=config)
+      else:
+        raise ValueError(f"Unknown Humanoid Light reference inference mode: {inference_mode}")
 
     return env

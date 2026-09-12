@@ -43,9 +43,13 @@ What gets returned by get_settings()
 
 """
 
+import os
+
+import numpy as np
+
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton, QGroupBox, QGridLayout,
-    QScrollArea, QLineEdit, QWidget, QDialogButtonBox, QSizePolicy, QApplication, QStyle
+    QScrollArea, QLineEdit, QWidget, QDialogButtonBox, QSizePolicy, QApplication, QStyle, QFileDialog
 )
 from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
@@ -87,6 +91,16 @@ class ObservationSettingsDialog(QDialog):
             "height_map", "masked_height_map", "camera_height_map",
             "last_action",
         ]
+        self._reference_progress_available = (
+            parent.env_id_cb.currentText() == "humanoid_light_v2"
+        )
+        self.stacked_obs_types = list(self.obs_types)
+        self.non_stacked_obs_types = list(self.obs_types)
+        if self._reference_progress_available:
+            self.non_stacked_obs_types.append("reference_progress")
+            # Include the persisted setting in get_settings(), even when it
+            # is currently not selected.
+            self.obs_types.append("reference_progress")
 
         # Saved settings (highest priority source)
         self.settings = settings if isinstance(settings, dict) else {}
@@ -98,6 +112,8 @@ class ObservationSettingsDialog(QDialog):
         # Each element is a dict: {"layout": QHBoxLayout, "combo": QComboBox, "freq": QComboBox, "scale": QComboBox}
         self.stacked_rows = []
         self.non_rows = []
+        self.reference_progress_source_le = None
+        self.reference_progress_hint_label = None
 
         # Command scale widgets
         self.cmd_scale_cbs = []
@@ -114,6 +130,53 @@ class ObservationSettingsDialog(QDialog):
     def _scale_options(self):
         """Common numeric options for scale selection combos."""
         return ["0", "0.01", "0.05", "0.1", "0.15", "0.25", "0.5", "0.75", "1.0", "2.0", "2.5", "5"]
+
+    def _reference_progress_source_path(self) -> str:
+        if self.reference_progress_source_le is not None:
+            return self.reference_progress_source_le.text().strip()
+        return str(self.settings.get("reference_progress_source", "")).strip()
+
+    def _reference_progress_hint(self) -> str:
+        """Describe the user-selected NPZ and the one-value progress contract."""
+        suffix = "Add it below as Non-Stacked; it becomes the final 91st student input (50 Hz / scale 1.0)."
+        motion_path = self._reference_progress_source_path()
+        if not motion_path or not os.path.isfile(motion_path):
+            return "Reference Progress Source (.npz): choose the phase source below. " + suffix
+        try:
+            with np.load(motion_path, allow_pickle=False) as motion:
+                frames = int(np.asarray(motion["base_frame_pos"]).shape[0])
+                fps = float(np.asarray(motion["fps"]).item())
+            duration = frames / fps if fps > 0.0 else float("nan")
+            return (
+                f"Reference Progress (1-D) from {os.path.basename(motion_path)}: "
+                f"{frames} frames, {fps:g} Hz, {duration:.3f} s; normalized 0 → 1, then held at 1. "
+                + suffix
+            )
+        except Exception:
+            return "Reference Progress Source (.npz): selected NPZ could not be read. " + suffix
+
+    def _refresh_reference_progress_hint(self):
+        if self.reference_progress_hint_label is not None:
+            self.reference_progress_hint_label.setText(self._reference_progress_hint())
+
+    def _browse_reference_progress_source(self):
+        current = self._reference_progress_source_path()
+        start_dir = os.path.dirname(current) if current else os.getcwd()
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Reference Progress Source", start_dir, "NPZ Files (*.npz)"
+        )
+        if path and self.reference_progress_source_le is not None:
+            self.reference_progress_source_le.setText(path)
+
+    @staticmethod
+    def _apply_reference_progress_contract(row):
+        """Keep the generated phase on the simulator control clock."""
+        is_progress = row["combo"].currentText() == "reference_progress"
+        if is_progress:
+            row["freq"].setCurrentText("50")
+            row["scale"].setCurrentText("1.0")
+        row["freq"].setEnabled(not is_progress)
+        row["scale"].setEnabled(not is_progress)
 
     # ---------- UI construction ----------
 
@@ -174,6 +237,23 @@ class ObservationSettingsDialog(QDialog):
         # ---------------- Non-Stacked Observation ----------------
         non_group = QGroupBox("Non-Stacked Observation")
         non_v = QVBoxLayout()
+        if self._reference_progress_available:
+            self.reference_progress_hint_label = QLabel(self._reference_progress_hint())
+            self.reference_progress_hint_label.setWordWrap(True)
+            self.reference_progress_hint_label.setStyleSheet("color: #2563EB; font-size: 8pt;")
+            non_v.addWidget(self.reference_progress_hint_label)
+            source_row = QHBoxLayout()
+            self.reference_progress_source_le = QLineEdit(
+                str(self.settings.get("reference_progress_source", ""))
+            )
+            self.reference_progress_source_le.setPlaceholderText("Select phase source .npz")
+            self.reference_progress_source_le.textChanged.connect(self._refresh_reference_progress_hint)
+            source_button = QPushButton("Browse")
+            source_button.clicked.connect(self._browse_reference_progress_source)
+            source_row.addWidget(QLabel("Reference Progress Source:"))
+            source_row.addWidget(self.reference_progress_source_le, 1)
+            source_row.addWidget(source_button)
+            non_v.addLayout(source_row)
         self.non_container = QVBoxLayout()
         non_v.addLayout(self.non_container)
         add_non = QPushButton("Add")
@@ -291,9 +371,10 @@ class ObservationSettingsDialog(QDialog):
         command_group = QGroupBox("Command")
         command_layout = QFormLayout()
 
-        # command_dim (1~6)
+        # command_dim (0~6). Zero keeps CommandWrapper in the normal flow but
+        # appends no command values to the policy state.
         self.command_dim_cb = NoWheelComboBox()
-        self.command_dim_cb.addItems([str(i) for i in range(1, 7)])
+        self.command_dim_cb.addItems([str(i) for i in range(0, 7)])
         self.command_dim_cb.setCurrentText(str(cmd_dim_val))
         command_layout.addRow("Command Dim:", self.command_dim_cb)
 
@@ -412,7 +493,7 @@ class ObservationSettingsDialog(QDialog):
 
         # obs type
         combo = NoWheelComboBox()
-        combo.addItems(self.obs_types)
+        combo.addItems(self.stacked_obs_types)
         if selected and combo.findText(selected) < 0:
             combo.addItem(selected)
         if selected:
@@ -450,7 +531,7 @@ class ObservationSettingsDialog(QDialog):
         h = QHBoxLayout()
 
         combo = NoWheelComboBox()
-        combo.addItems(self.obs_types)
+        combo.addItems(self.non_stacked_obs_types)
         if selected and combo.findText(selected) < 0:
             combo.addItem(selected)
         if selected:
@@ -476,12 +557,17 @@ class ObservationSettingsDialog(QDialog):
         h.addWidget(remove)
 
         self.non_container.addLayout(h)
-        self.non_rows.append({"layout": h, "combo": combo, "freq": freq_cb, "scale": scale_cb})
+        row = {"layout": h, "combo": combo, "freq": freq_cb, "scale": scale_cb}
+        self.non_rows.append(row)
+        combo.currentTextChanged.connect(lambda _text, row=row: self._apply_reference_progress_contract(row))
+        self._apply_reference_progress_contract(row)
 
         QTimer.singleShot(0, self._recalculate_height)
 
     def get_default_scale(self, obs_type: str) -> float:
         """Read default scale for a given obs_type from the current env's obs_scales."""
+        if obs_type == "reference_progress":
+            return 1.0
         env_id = self.parent_widget.env_id_cb.currentText()
         env_cfg = self.parent_widget.env_config.get(env_id, {}) or {}
         obs_scales = env_cfg.get("obs_scales", {}) or {}
@@ -554,6 +640,13 @@ class ObservationSettingsDialog(QDialog):
         # command_scales
         command_scales = {str(i): float(cb.currentText()) for i, cb in enumerate(self.cmd_scale_cbs)}
 
+        if "reference_progress" in stacked_order:
+            raise ValueError("Reference Progress can be added only to Non-Stacked Observation.")
+        if non_order.count("reference_progress") > 1:
+            raise ValueError("Add Reference Progress at most once.")
+        if "reference_progress" in non_order and not self._reference_progress_source_path():
+            raise ValueError("Choose a Reference Progress Source (.npz) in Observation Settings.")
+
         # height map detail
         sx = to_float(self.height_size_x_le.text(), 1.0)
         sy = to_float(self.height_size_y_le.text(), 0.6)
@@ -586,6 +679,7 @@ class ObservationSettingsDialog(QDialog):
             "stack_size": stack_size,
             "command_dim": int(self.command_dim_cb.currentText()),
             "command_scales": command_scales,
+            "reference_progress_source": self._reference_progress_source_path(),
             "height_map": height_map,
             **obs_dict
         }
