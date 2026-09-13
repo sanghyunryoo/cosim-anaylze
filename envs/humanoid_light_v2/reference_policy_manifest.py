@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA = "humanoid_light_reference_distilled_trajectory_v3"
-PHASE_LAYOUT = ["control_progress"]
+SCHEMA = "humanoid_light_reference_distilled_trajectory_v4"
+PHASE_LAYOUT = ["reference_progress"]
 
 
 def manifest_path_for(policy_path: str | Path) -> Path:
@@ -66,8 +66,12 @@ def load_distilled_locomotion_manifest(policy_path: str | Path) -> dict[str, Any
     progress_cfg = (observation_contract.get("per_observation", {}) or {}).get("reference_progress", {})
     if int(progress_cfg.get("freq", 0)) != 50 or float(progress_cfg.get("scale", float("nan"))) != 1.0:
         return None
-    phase_source = payload.get("phase_source")
-    if not isinstance(phase_source, dict) or not str(phase_source.get("sha256", "")):
+    if payload.get("phase_input_mode") != "user_configured_frame_count":
+        return None
+    try:
+        if int(payload.get("phase_frame_count", 0)) < 1:
+            return None
+    except (TypeError, ValueError):
         return None
     if payload.get("deployment_strategy") != "learned_distilled_trajectory_residual":
         return None

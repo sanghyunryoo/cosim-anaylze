@@ -72,36 +72,6 @@ def resolve_reference_motion(motion: str | Path | None, reference_dir: str | Pat
     raise FileNotFoundError(f"Reference motion not found: {motion!s}. Available bundled clips: {available}")
 
 
-class ReferencePhaseClock:
-    """Minimal NPZ clock used by locomotion's user-configured phase input.
-
-    This intentionally reads only the clip timeline.  A normal locomotion
-    rollout does not need reference reset/target data or a selected
-    ``reference_motion`` mode to provide the one phase observation.
-    """
-
-    def __init__(self, motion_path: str | Path):
-        self.motion_path = Path(motion_path).expanduser().resolve()
-        if not self.motion_path.is_file():
-            raise FileNotFoundError(f"Reference progress source NPZ not found: {self.motion_path}")
-        try:
-            with np.load(self.motion_path, allow_pickle=False) as motion:
-                self.num_frames = int(np.asarray(motion["base_frame_pos"]).shape[0])
-                self.fps = float(np.asarray(motion["fps"]).item())
-        except Exception as exc:
-            raise ValueError(f"Could not read reference progress source '{self.motion_path}': {exc}") from exc
-        if self.num_frames < 1 or self.fps <= 0.0:
-            raise ValueError(
-                f"Reference progress source has invalid frame/fps values: frames={self.num_frames}, fps={self.fps}."
-            )
-        self.duration_s = self.num_frames / self.fps
-
-    def trajectory_progress(self, control_step: int, control_dt: float) -> np.ndarray:
-        num_control_steps = max(1, int(np.floor(self.duration_s / float(control_dt) + 1.0e-6)))
-        progress = min(max(int(control_step), 0), num_control_steps - 1) / max(num_control_steps - 1, 1)
-        return np.asarray((progress,), dtype=np.float32)
-
-
 class HumanoidLightReferenceMotion:
     """A single retargeted clip in the requested simulator joint order."""
 

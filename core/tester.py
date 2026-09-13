@@ -362,6 +362,20 @@ class Tester(QObject):
             "per_observation": per_observation,
         }
 
+    @staticmethod
+    def _validate_reference_progress_frames(settings, manifest):
+        """Ensure the user-entered phase frame count matches the exported prior table."""
+        try:
+            configured = int((settings or {}).get("reference_progress_frames", 0))
+            expected = int((manifest or {}).get("phase_frame_count", 0))
+        except (TypeError, ValueError):
+            configured = expected = 0
+        if configured < 1 or configured != expected:
+            raise RuntimeError(
+                "Reference Progress Frames does not match this distilled policy: "
+                f"configured={configured}, policy={expected}."
+            )
+
     def _validate_reference_policy_contract(self, state):
         """Fail before simulation when an incompatible ONNX is selected."""
 
@@ -381,21 +395,17 @@ class Tester(QObject):
             if current_contract != manifest.get("observation_contract"):
                 raise RuntimeError(
                     "Observation Settings do not match this distilled policy. "
-                    "Use the same stacked/non-stacked order, scale, frequency, Command Dim=0, and phase source."
+                    "Use the same stacked/non-stacked order, scale, frequency, and Command Dim=0."
                 )
-            settings_cfg = self.config.get("settings", self.config.get("observation", {})) or {}
-            phase_source = str(settings_cfg.get("reference_progress_source", "")).strip()
-            expected_phase_hash = str((manifest.get("phase_source", {}) or {}).get("sha256", ""))
+            self._validate_reference_progress_frames(
+                self.config.get("settings", self.config.get("observation", {})), manifest
+            )
             try:
                 expected_policy_hash = str(manifest.get("onnx_sha256", ""))
                 if expected_policy_hash and sha256_file(self.policy_path) != expected_policy_hash:
                     raise RuntimeError("The selected ONNX no longer matches its reference-imitation manifest.")
-                if not phase_source or sha256_file(phase_source) != expected_phase_hash:
-                    raise RuntimeError(
-                        "The configured Reference Progress Source does not match the NPZ used to export this policy."
-                    )
             except OSError as exc:
-                raise RuntimeError(f"Could not validate Reference Progress Source: {exc}") from exc
+                raise RuntimeError(f"Could not validate distilled policy ONNX: {exc}") from exc
         else:
             mode = str(reference_cfg.get("inference_mode", "teacher")).strip().lower()
             if mode == "teacher":
@@ -417,11 +427,11 @@ class Tester(QObject):
                         "Observation Settings do not match this distilled policy. "
                         "Use the same stacked/non-stacked order, scale, frequency, and command settings used for export."
                     )
+                self._validate_reference_progress_frames(
+                    self.config.get("settings", self.config.get("observation", {})), manifest
+                )
                 selected_motion = str(reference_cfg.get("motion", "")).strip()
                 expected_hash = str((manifest.get("reference_motion", {}) or {}).get("sha256", ""))
-                settings_cfg = self.config.get("settings", self.config.get("observation", {})) or {}
-                phase_source = str(settings_cfg.get("reference_progress_source", "")).strip()
-                expected_phase_hash = str((manifest.get("phase_source", {}) or {}).get("sha256", ""))
                 try:
                     expected_policy_hash = str(manifest.get("onnx_sha256", ""))
                     if expected_policy_hash and sha256_file(self.policy_path) != expected_policy_hash:
@@ -430,12 +440,8 @@ class Tester(QObject):
                         raise RuntimeError(
                             "The selected distilled locomotion ONNX was exported for a different reference motion."
                         )
-                    if not phase_source or sha256_file(phase_source) != expected_phase_hash:
-                        raise RuntimeError(
-                            "The configured Reference Progress Source does not match the NPZ used to export this policy."
-                        )
                 except OSError as exc:
-                    raise RuntimeError(f"Could not validate distilled policy reference motion or phase source: {exc}") from exc
+                    raise RuntimeError(f"Could not validate distilled policy reference motion: {exc}") from exc
             else:
                 raise RuntimeError(f"Unknown Humanoid Light reference inference mode: {mode}")
         if np.asarray(state).shape != (expected_obs_dim,):

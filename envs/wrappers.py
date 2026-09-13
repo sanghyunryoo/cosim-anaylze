@@ -7,7 +7,6 @@ import mujoco
 
 from envs.humanoid_light_v2.reference_motion_loader import (
     HumanoidLightReferenceMotion,
-    ReferencePhaseClock,
 )
 
 try:
@@ -131,7 +130,7 @@ class StateBuildWrapper(BaseEnv):
         has_reference_progress = "reference_progress" in (
             self.stacked_obs_order + self.non_stacked_obs_order
         )
-        self._reference_phase_clock = None
+        self.reference_progress_frames = 0
         if has_reference_progress:
             if "reference_progress" in self.stacked_obs_order:
                 raise ValueError("'reference_progress' is available only as a Non-Stacked Observation.")
@@ -145,12 +144,15 @@ class StateBuildWrapper(BaseEnv):
                     "'reference_progress' must use the control frequency and scale=1.0 "
                     f"(expected {int(round(self.control_freq))} Hz)."
                 )
-            phase_source = str(self.settings_cfg.get("reference_progress_source", "")).strip()
-            if not phase_source:
+            try:
+                phase_frames = int(self.settings_cfg.get("reference_progress_frames", 0))
+            except (TypeError, ValueError):
+                phase_frames = 0
+            if phase_frames < 1:
                 raise ValueError(
-                    "Set Reference Progress Source (.npz) in Observation Settings when using 'reference_progress'."
+                    "Set Reference Progress Frames to a positive 50 Hz frame count when using 'reference_progress'."
                 )
-            self._reference_phase_clock = ReferencePhaseClock(phase_source)
+            self.reference_progress_frames = phase_frames
             self.obs_to_dim["reference_progress"] = 1
 
         # Cache dimensions
@@ -398,9 +400,10 @@ class StateBuildWrapper(BaseEnv):
 
             if need_update or (n not in self._freq_cache):
                 if n == "reference_progress":
-                    val = self._reference_phase_clock.trajectory_progress(
-                        self.sim_step, 1.0 / self.control_freq
-                    ) * scale
+                    phase = min(max(self.sim_step, 0), self.reference_progress_frames - 1) / max(
+                        self.reference_progress_frames - 1, 1
+                    )
+                    val = np.asarray((phase * scale,), dtype=np.float32)
                 elif n in obs and obs[n] is not None:
                     val = np.asarray(obs[n], dtype=np.float32) * scale
                 else:
@@ -765,6 +768,10 @@ class ReferenceMotionProgressWrapper(ReferenceMotionTargetWrapper):
         stacked = list(settings_cfg.get("stacked_obs_order", []) or [])
         non_stacked = list(settings_cfg.get("non_stacked_obs_order", []) or [])
         progress_cfg = settings_cfg.get("reference_progress") or {}
+        try:
+            self._reference_progress_frames = int(settings_cfg.get("reference_progress_frames", 0))
+        except (TypeError, ValueError):
+            self._reference_progress_frames = 0
         if (
             int(settings_cfg.get("command_dim", -1)) != 0
             or
@@ -774,20 +781,24 @@ class ReferenceMotionProgressWrapper(ReferenceMotionTargetWrapper):
             or non_stacked[-1] != "reference_progress"
             or int(progress_cfg.get("freq", 0)) != int(round(self.control_freq))
             or not np.isclose(float(progress_cfg.get("scale", float("nan"))), 1.0)
+            or self._reference_progress_frames < 1
         ):
             raise RuntimeError(
                 "Distilled reference trajectory requires 'reference_progress' exactly once in "
                 f"Non-Stacked Observation as its final item, Command Dim=0, and "
-                f"freq={int(round(self.control_freq))} with scale=1.0."
+                f"freq={int(round(self.control_freq))}, scale=1.0, and a positive Reference Progress Frames value."
             )
         # Keep the student-test terminal log concise enough to show whether
         # simulation continues after the clip, without printing all 90-D
         # proprioception every control tick.
-        self._clip_control_steps = max(1, int(np.floor(self.motion.duration_s / self.control_dt + 1.0e-6)))
+        self._clip_control_steps = self._reference_progress_frames
         self._command_log_interval_steps = max(1, int(round(self.control_freq / 2.0)))
 
     def _condition(self, step: int) -> np.ndarray:
-        return self.motion.trajectory_progress(step, self.control_dt)
+        phase = min(max(int(step), 0), self._reference_progress_frames - 1) / max(
+            self._reference_progress_frames - 1, 1
+        )
+        return np.asarray((phase,), dtype=np.float32)
 
     def _is_post_clip(self, step: int) -> bool:
         return int(step) >= self._clip_control_steps

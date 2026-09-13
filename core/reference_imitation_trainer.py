@@ -185,16 +185,6 @@ class ReferenceImitationTrainer:
         except Exception as exc:
             raise RuntimeError(f"Could not read duration from reference NPZ '{motion_path}': {exc}") from exc
 
-    @staticmethod
-    def _phase_source_path(config: dict) -> Path:
-        settings = config.get("settings", config.get("observation", {})) or {}
-        path = Path(str(settings.get("reference_progress_source", "")).strip()).expanduser()
-        if not path.is_file():
-            raise RuntimeError(
-                "Choose a valid Reference Progress Source (.npz) in Observation Settings before export."
-            )
-        return path.resolve()
-
     def _load_teacher(self, teacher_path: str):
         path = Path(teacher_path).expanduser().resolve()
         if not path.is_file():
@@ -262,6 +252,19 @@ class ReferenceImitationTrainer:
             "per_observation": per_observation,
         }
 
+    @staticmethod
+    def _reference_progress_frames(settings: dict) -> int:
+        try:
+            frames = int((settings or {}).get("reference_progress_frames", 0))
+        except (TypeError, ValueError):
+            frames = 0
+        if frames < 1:
+            raise RuntimeError(
+                "Set Observation Settings → Reference Progress Frames to a positive 50 Hz frame count "
+                "(for example, 779)."
+            )
+        return frames
+
     @classmethod
     def _student_layout(cls, teacher_env, student_config: dict) -> dict:
         """Map a 276-D teacher state into the configured student state.
@@ -281,13 +284,21 @@ class ReferenceImitationTrainer:
             raise RuntimeError(
                 "Set Observation Settings → Command Dim to 0 for the 91-D reference student."
             )
-        cls._phase_source_path(student_config)
+        phase_frame_count = cls._reference_progress_frames(settings)
         progress_cfg = settings.get("reference_progress") or {}
         if int(progress_cfg.get("freq", 0)) != 50 or not np.isclose(
             float(progress_cfg.get("scale", float("nan"))), 1.0
         ):
             raise RuntimeError("'reference_progress' must use freq=50 and scale=1.0.")
         reference_wrapper = cls._find_reference_wrapper(teacher_env)
+        teacher_control_steps = max(
+            1, int(np.floor(reference_wrapper.motion.duration_s / reference_wrapper.control_dt + 1.0e-6))
+        )
+        if phase_frame_count != teacher_control_steps:
+            raise RuntimeError(
+                "Reference Progress Frames must equal the selected teacher clip's 50 Hz control-frame count: "
+                f"configured={phase_frame_count}, teacher={teacher_control_steps}."
+            )
         command_wrapper = cls._find_wrapper(teacher_env, "CommandWrapper")
         state_builder = cls._find_wrapper(teacher_env, "StateBuildWrapper")
         if command_wrapper is None or state_builder is None:
@@ -326,6 +337,7 @@ class ReferenceImitationTrainer:
             "pre_command_dim": pre_command_dim,
             "progress_index": progress_index,
             "input_dim": expected_dim,
+            "phase_frame_count": phase_frame_count,
         }
 
     @staticmethod
@@ -607,7 +619,7 @@ class ReferenceImitationTrainer:
         reference_cfg["inference_mode"] = "teacher"
         teacher_config.setdefault("env", {})["render"] = False
         teacher_config["env"]["render_mode"] = "none"
-        # Training labels/prior cover exactly one source clip.  This is
+        # Training labels/prior cover exactly one teacher clip.  This is
         # deliberately independent of the user-visible Max Duration, which
         # may be longer during Start Test to inspect post-clip behaviour.
         teacher_config["env"]["max_duration"] = self._reference_duration_from_config(teacher_config)
@@ -616,14 +628,11 @@ class ReferenceImitationTrainer:
         student_config["env"]["render_mode"] = "none"
         student_config["fine_tune"] = {"enabled": False, "ridge_lambda": 1e-4, "max_samples": 1}
         student_config.setdefault("reference_motion", {})["inference_mode"] = "distilled_locomotion"
-        phase_source_path = self._phase_source_path(student_config)
         teacher_motion_path = Path(str(reference_cfg.get("motion", ""))).expanduser()
         if not teacher_motion_path.is_file():
             teacher_motion_path = Path(str(reference_cfg.get("directory", ""))).expanduser() / teacher_motion_path
-        if not teacher_motion_path.is_file() or sha256_file(phase_source_path) != sha256_file(teacher_motion_path):
-            raise RuntimeError(
-                "Reference Progress Source must be the same NPZ as the reference teacher clip during export."
-            )
+        if not teacher_motion_path.is_file():
+            raise RuntimeError("Could not resolve the reference teacher clip used for distillation.")
 
         samples_per_round = max(1, int(self.settings.get("samples_per_round", 6000)))
         dagger_rounds = max(1, int(self.settings.get("dagger_rounds", 6)))
@@ -653,7 +662,7 @@ class ReferenceImitationTrainer:
         student_obs_dim = int(student_layout["input_dim"])
         self._log(
             f"[reference-distill] teacher 276→26; student {student_obs_dim}→26; "
-            f"progress index={student_layout['progress_index']}, phase=[control_progress], scale=[1]."
+            f"progress index={student_layout['progress_index']}, phase=[reference_progress], scale=[1]."
         )
         self._log(
             "[reference-distill] collected nominal teacher trajectory prior: "
@@ -757,6 +766,8 @@ class ReferenceImitationTrainer:
             "proprio_dim": 90,
             "phase_scale": 1.0,
             "phase_layout": PHASE_LAYOUT,
+            "phase_input_mode": "user_configured_frame_count",
+            "phase_frame_count": int(student_layout["phase_frame_count"]),
             "observation_contract": self._observation_contract(
                 student_config.get("settings", student_config.get("observation", {}))
             ),
@@ -769,19 +780,11 @@ class ReferenceImitationTrainer:
                 "residual_gate_scale": residual_gate_scale,
                 "torch_num_threads": torch_num_threads,
             },
-            "motion_control_mapping": (
-                "reference_frame=floor(control_step*control_dt*fps+1e-6), clamped; "
-                "control_progress=control_step/(episode_control_steps-1), clamped"
-            ),
+            "distillation_phase_label": "teacher_control_step/(teacher_clip_control_steps-1), clamped",
             "reference_motion": {
                 "path": str(reference_path),
                 "filename": reference_path.name,
                 "sha256": sha256_file(reference_path),
-            },
-            "phase_source": {
-                "path": str(phase_source_path),
-                "filename": phase_source_path.name,
-                "sha256": sha256_file(phase_source_path),
             },
             "teacher": {"path": str(teacher_policy_path), "sha256": sha256_file(teacher_policy_path)},
             "action_scale": list(teacher_config.get("action_scales", [])),

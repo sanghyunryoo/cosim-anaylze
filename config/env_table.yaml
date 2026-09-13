@@ -34,7 +34,7 @@
     "size_y": 0.6
     "res_x": 15
     "res_y": 9
-  "action_scales": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
+  "action_scales": [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
 
   "hardware":
     "action_dim": 26
@@ -46,37 +46,71 @@
     "torso_pitch_roll_gear_ratio_1": 1.0
     "torso_pitch_roll_gear_ratio_2": 1.0
 
+    ### SH ###
+    # "Kp_hip_pitch": 100
+    # "Kp_torso_yaw": 100
+    # "Kp_torso_pitch": 100
+    # "Kp_torso_roll": 100
+    # "Kp_hip_roll": 100
+    # "Kp_shoulder_pitch": 100
+    # "Kp_hip_yaw": 100
+    # "Kp_shoulder_roll": 100
+    # "Kp_knee": 100
+    # "Kp_shoulder_yaw": 25
+    # "Kp_ankle_pitch": 20
+    # "Kp_ankle_roll": 20
+    # "Kp_elbow": 50
+    # "Kp_wrist": 50
+    # "Kp_head": 20
+
+    # "Kd_hip_pitch": 1.0
+    # "Kd_torso_yaw": 1.0
+    # "Kd_torso_pitch": 1.0
+    # "Kd_torso_roll": 1.0
+    # "Kd_hip_roll": 1.0
+    # "Kd_shoulder_pitch": 1.0
+    # "Kd_hip_yaw": 1.0
+    # "Kd_shoulder_roll": 1.0
+    # "Kd_knee": 1.0
+    # "Kd_shoulder_yaw": 1.0
+    # "Kd_ankle_pitch": 0.25
+    # "Kd_ankle_roll": 0.25
+    # "Kd_elbow": 1.0
+    # "Kd_wrist": 1.0
+    # "Kd_head": 0.25
+
+    ### MJ ###
     "Kp_hip_pitch": 100
-    "Kp_torso_yaw": 100
-    "Kp_torso_pitch": 200
-    "Kp_torso_roll": 200
+    "Kp_torso_yaw": 200
+    "Kp_torso_pitch": 40
+    "Kp_torso_roll": 40
     "Kp_hip_roll": 100
-    "Kp_shoulder_pitch": 100
+    "Kp_shoulder_pitch": 40
     "Kp_hip_yaw": 100
-    "Kp_shoulder_roll": 100
-    "Kp_knee": 100
-    "Kp_shoulder_yaw": 25
-    "Kp_ankle_pitch": 20
-    "Kp_ankle_roll": 20
-    "Kp_elbow": 50
-    "Kp_wrist": 50
+    "Kp_shoulder_roll": 40
+    "Kp_knee": 150
+    "Kp_shoulder_yaw": 40
+    "Kp_ankle_pitch": 40
+    "Kp_ankle_roll": 40
+    "Kp_elbow": 40
+    "Kp_wrist": 40
     "Kp_head": 20
 
-    "Kd_hip_pitch": 1.0
-    "Kd_torso_yaw": 1.0
-    "Kd_torso_pitch": 1.7
-    "Kd_torso_roll": 1.7
-    "Kd_hip_roll": 1.0
+    "Kd_hip_pitch": 2.0
+    "Kd_torso_yaw": 5.0
+    "Kd_torso_pitch": 5.0
+    "Kd_torso_roll": 5.0
+    "Kd_hip_roll": 2.0
     "Kd_shoulder_pitch": 1.0
-    "Kd_hip_yaw": 1.0
+    "Kd_hip_yaw": 2.0
     "Kd_shoulder_roll": 1.0
-    "Kd_knee": 1.0
+    "Kd_knee": 4.0
     "Kd_shoulder_yaw": 1.0
-    "Kd_ankle_pitch": 0.25
-    "Kd_ankle_roll": 0.25
+    "Kd_ankle_pitch": 2.0
+    "Kd_ankle_roll": 2.0
     "Kd_elbow": 1.0
     "Kd_wrist": 1.0
-    "Kd_head": 0.25
+    "Kd_head": 0.2
 
     "hip_roll_joint_max_torque": 60
     "hip_roll_joint_max_vel": 20

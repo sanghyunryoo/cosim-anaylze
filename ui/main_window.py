@@ -221,7 +221,7 @@ class MainWindow(QMainWindow):
             "stack_size": 3,
             "command_dim": 6,
             "command_scales": {"0": 1.0, "1": 1.0, "2": 1.0, "3": 1.0, "4": 1.0, "5": 1.0},
-            "reference_progress_source": "",
+            "reference_progress_frames": 0,
             "height_map": {
                 "size_x": 1.0,
                 "size_y": 0.6,
@@ -322,7 +322,7 @@ class MainWindow(QMainWindow):
             "stack_size": stack_size_yaml,
             "command_dim": cmd_dim,
             "command_scales": merged_command_scales,
-            "reference_progress_source": "",
+            "reference_progress_frames": 0,
             "height_map": height_map_val,
             **obs_dict
         }
@@ -1548,9 +1548,12 @@ class MainWindow(QMainWindow):
             return "Place Reference Progress last in Non-Stacked Observation; it becomes the final (91st) student input."
         if to_int(settings_cfg.get("command_dim", -1), -1) != 0:
             return "Set Command Dim to 0 for the 91-D reference student; phase replaces the command tail."
-        phase_source = str(settings_cfg.get("reference_progress_source", "")).strip()
-        if not phase_source or not os.path.isfile(phase_source):
-            return "Choose a valid Reference Progress Source (.npz) in Observation Settings."
+        try:
+            phase_frames = int(settings_cfg.get("reference_progress_frames", 0))
+        except (TypeError, ValueError):
+            phase_frames = 0
+        if phase_frames < 1:
+            return "Set Reference Progress Frames in Observation Settings to a positive 50 Hz frame count (for example, 779)."
         if to_int(progress_cfg.get("freq", 0), 0) != 50 or not np.isclose(
             to_float(progress_cfg.get("scale", float("nan")), float("nan")), 1.0
         ):
@@ -1571,6 +1574,7 @@ class MainWindow(QMainWindow):
             if name != "reference_progress"
         ]
         settings_cfg.pop("reference_progress", None)
+        settings_cfg.pop("reference_progress_frames", None)
         # The Isaac teacher retained four zero command slots in its 276-D
         # input. The 91-D student omits that command tail entirely.
         settings_cfg["command_dim"] = 4

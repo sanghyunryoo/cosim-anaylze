@@ -43,13 +43,9 @@ What gets returned by get_settings()
 
 """
 
-import os
-
-import numpy as np
-
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton, QGroupBox, QGridLayout,
-    QScrollArea, QLineEdit, QWidget, QDialogButtonBox, QSizePolicy, QApplication, QStyle, QFileDialog
+    QScrollArea, QLineEdit, QWidget, QDialogButtonBox, QSizePolicy, QApplication, QStyle
 )
 from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QDoubleValidator, QIntValidator
@@ -112,7 +108,7 @@ class ObservationSettingsDialog(QDialog):
         # Each element is a dict: {"layout": QHBoxLayout, "combo": QComboBox, "freq": QComboBox, "scale": QComboBox}
         self.stacked_rows = []
         self.non_rows = []
-        self.reference_progress_source_le = None
+        self.reference_progress_frames_le = None
         self.reference_progress_hint_label = None
 
         # Command scale widgets
@@ -131,46 +127,38 @@ class ObservationSettingsDialog(QDialog):
         """Common numeric options for scale selection combos."""
         return ["0", "0.01", "0.05", "0.1", "0.15", "0.25", "0.5", "0.75", "1.0", "2.0", "2.5", "5"]
 
-    def _reference_progress_source_path(self) -> str:
-        if self.reference_progress_source_le is not None:
-            return self.reference_progress_source_le.text().strip()
-        return str(self.settings.get("reference_progress_source", "")).strip()
+    def _reference_progress_frames(self) -> int | None:
+        """Return the user-provided 50 Hz trajectory frame count, or ``None`` when invalid."""
+        raw = (
+            self.reference_progress_frames_le.text().strip()
+            if self.reference_progress_frames_le is not None
+            else str(self.settings.get("reference_progress_frames", "")).strip()
+        )
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value >= 1 else None
 
     def _reference_progress_hint(self) -> str:
-        """Describe the user-selected NPZ and the one-value progress contract."""
+        """Describe the direct, user-provided 50 Hz phase-clock contract."""
+        frames = self._reference_progress_frames()
         suffix = "Add it below as Non-Stacked; it becomes the final 91st student input (50 Hz / scale 1.0)."
-        motion_path = self._reference_progress_source_path()
-        if not motion_path or not os.path.isfile(motion_path):
-            return "Reference Progress Source (.npz): choose the phase source below. " + suffix
-        try:
-            with np.load(motion_path, allow_pickle=False) as motion:
-                frames = int(np.asarray(motion["base_frame_pos"]).shape[0])
-                fps = float(np.asarray(motion["fps"]).item())
-            duration = frames / fps if fps > 0.0 else float("nan")
-            return (
-                f"Reference Progress (1-D) from {os.path.basename(motion_path)}: "
-                f"{frames} frames, {fps:g} Hz, {duration:.3f} s; normalized 0 → 1, then held at 1. "
-                + suffix
-            )
-        except Exception:
-            return "Reference Progress Source (.npz): selected NPZ could not be read. " + suffix
+        if frames is None:
+            return "Reference Progress Frames must be an integer of at least 1. " + suffix
+        duration = frames / 50.0
+        return (
+            f"Reference Progress uses {frames} frames at 50 Hz ({duration:.3f} s): "
+            "phase = clamp(control_step / (frames - 1), 0, 1). " + suffix
+        )
 
     def _refresh_reference_progress_hint(self):
         if self.reference_progress_hint_label is not None:
             self.reference_progress_hint_label.setText(self._reference_progress_hint())
 
-    def _browse_reference_progress_source(self):
-        current = self._reference_progress_source_path()
-        start_dir = os.path.dirname(current) if current else os.getcwd()
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select Reference Progress Source", start_dir, "NPZ Files (*.npz)"
-        )
-        if path and self.reference_progress_source_le is not None:
-            self.reference_progress_source_le.setText(path)
-
     @staticmethod
     def _apply_reference_progress_contract(row):
-        """Keep the generated phase on the simulator control clock."""
+        """Keep the scalar phase on the fixed 50 Hz / scale=1 observation contract."""
         is_progress = row["combo"].currentText() == "reference_progress"
         if is_progress:
             row["freq"].setCurrentText("50")
@@ -242,18 +230,16 @@ class ObservationSettingsDialog(QDialog):
             self.reference_progress_hint_label.setWordWrap(True)
             self.reference_progress_hint_label.setStyleSheet("color: #2563EB; font-size: 8pt;")
             non_v.addWidget(self.reference_progress_hint_label)
-            source_row = QHBoxLayout()
-            self.reference_progress_source_le = QLineEdit(
-                str(self.settings.get("reference_progress_source", ""))
+            frame_row = QHBoxLayout()
+            self.reference_progress_frames_le = QLineEdit(
+                str(self.settings.get("reference_progress_frames", ""))
             )
-            self.reference_progress_source_le.setPlaceholderText("Select phase source .npz")
-            self.reference_progress_source_le.textChanged.connect(self._refresh_reference_progress_hint)
-            source_button = QPushButton("Browse")
-            source_button.clicked.connect(self._browse_reference_progress_source)
-            source_row.addWidget(QLabel("Reference Progress Source:"))
-            source_row.addWidget(self.reference_progress_source_le, 1)
-            source_row.addWidget(source_button)
-            non_v.addLayout(source_row)
+            self.reference_progress_frames_le.setValidator(QIntValidator(1, 10_000_000))
+            self.reference_progress_frames_le.setPlaceholderText("e.g. 779")
+            self.reference_progress_frames_le.textChanged.connect(self._refresh_reference_progress_hint)
+            frame_row.addWidget(QLabel("Reference Progress Frames (50 Hz):"))
+            frame_row.addWidget(self.reference_progress_frames_le, 1)
+            non_v.addLayout(frame_row)
         self.non_container = QVBoxLayout()
         non_v.addLayout(self.non_container)
         add_non = QPushButton("Add")
@@ -644,8 +630,9 @@ class ObservationSettingsDialog(QDialog):
             raise ValueError("Reference Progress can be added only to Non-Stacked Observation.")
         if non_order.count("reference_progress") > 1:
             raise ValueError("Add Reference Progress at most once.")
-        if "reference_progress" in non_order and not self._reference_progress_source_path():
-            raise ValueError("Choose a Reference Progress Source (.npz) in Observation Settings.")
+        reference_progress_frames = self._reference_progress_frames()
+        if "reference_progress" in non_order and reference_progress_frames is None:
+            raise ValueError("Reference Progress Frames must be an integer of at least 1.")
 
         # height map detail
         sx = to_float(self.height_size_x_le.text(), 1.0)
@@ -679,7 +666,7 @@ class ObservationSettingsDialog(QDialog):
             "stack_size": stack_size,
             "command_dim": int(self.command_dim_cb.currentText()),
             "command_scales": command_scales,
-            "reference_progress_source": self._reference_progress_source_path(),
+            "reference_progress_frames": 0 if reference_progress_frames is None else reference_progress_frames,
             "height_map": height_map,
             **obs_dict
         }
